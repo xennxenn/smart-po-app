@@ -317,6 +317,7 @@ function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, 
   const [currentLineSelection, setCurrentLineSelection] = useState('');
   const [currentQty, setCurrentQty] = useState(1);
   const [saving, setSaving] = useState(false);
+  const [printMode, setPrintMode] = useState(null); // 'report1' | 'report2' | null
 
   useEffect(() => {
     if (poId) {
@@ -428,16 +429,37 @@ function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, 
     setOrderLines([...orderLines, { type: 'item', refId: itemId, quantity: missingQty }]);
   };
 
+  const handlePrint = (mode) => {
+    setPrintMode(mode);
+    setTimeout(() => {
+      window.print();
+      setPrintMode(null);
+    }, 150);
+  };
+
   return (
-    <div className="p-4 md:p-8 max-w-5xl mx-auto space-y-6 print:p-0">
+    <div className="p-4 md:p-8 max-w-5xl mx-auto space-y-6 print:p-0 print:m-0 print:max-w-none print:w-full">
+      {/* --- CSS สำหรับการพิมพ์ --- */}
+      <style type="text/css">
+        {`
+          @media print {
+            @page { size: A4 portrait; margin: 15mm; }
+            body { -webkit-print-color-adjust: exact; print-color-adjust: exact; background-color: white !important; }
+            .print-avoid-break { page-break-inside: avoid; break-inside: avoid; }
+            .print-table-header { display: table-header-group; }
+          }
+        `}
+      </style>
+
       <div className="flex justify-between items-center print:hidden bg-white p-4 rounded-2xl border shadow-sm">
         <div className="flex items-center space-x-3">
           <button onClick={onBack} className="p-2 hover:bg-slate-100 rounded-full"><ArrowLeft size={20}/></button>
           <input type="text" value={title} onChange={e => setTitle(e.target.value)} className="font-bold text-lg border-b border-transparent focus:border-indigo-500 outline-none px-2 py-1 w-64"/>
         </div>
         <div className="flex space-x-2">
-          <button onClick={() => window.print()} className="px-4 py-2 bg-slate-100 rounded-xl font-bold flex items-center shadow-sm hover:bg-slate-200 transition-colors"><Printer size={18} className="mr-2"/> พิมพ์ PDF</button>
-          <button onClick={handleSave} disabled={saving} className="px-6 py-2 bg-indigo-600 text-white rounded-xl font-bold shadow-lg active:scale-95 transition-all">{saving ? '...' : 'บันทึก'}</button>
+          <button onClick={() => handlePrint('report1')} className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl font-bold flex items-center shadow-sm hover:bg-slate-200 transition-colors text-sm"><Printer size={16} className="mr-2"/> พิมพ์รายงาน 1</button>
+          <button onClick={() => handlePrint('report2')} className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl font-bold flex items-center shadow-sm hover:bg-slate-200 transition-colors text-sm"><Printer size={16} className="mr-2"/> พิมพ์รายงาน 2</button>
+          <button onClick={handleSave} disabled={saving} className="px-6 py-2 bg-indigo-600 text-white rounded-xl font-bold shadow-lg active:scale-95 transition-all ml-2">{saving ? '...' : 'บันทึก'}</button>
         </div>
       </div>
 
@@ -483,15 +505,25 @@ function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, 
         </div>
       </div>
 
-      <div className="space-y-10">
+      <div className="space-y-10 print:space-y-0">
         {/* Report 1 */}
-        <div className="bg-white border rounded-2xl overflow-hidden shadow-sm">
-          <div className="bg-slate-50 p-4 border-b font-bold text-slate-800">รายงาน 1: รายการในบิลสั่งซื้อ (ชุดอุปกรณ์ และ สินค้ารายตัว)</div>
-          <table className="w-full text-sm text-left">
-            <thead className="bg-slate-50 border-b text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-              <tr><th className="p-4">ประเภท</th><th className="p-4">รายการ</th><th className="p-4 text-center">จำนวน</th><th className="p-4 text-right">ราคาหน่วย</th><th className="p-4 text-right">ราคารวม</th><th className="p-4 print:hidden text-center">จัดการ</th></tr>
+        <div className={`bg-white border rounded-2xl overflow-hidden shadow-sm print:border-none print:shadow-none print:rounded-none ${printMode === 'report2' ? 'print:hidden' : ''}`}>
+          
+          {/* Header สำหรับหน้าพิมพ์ (Report 1) */}
+          <div className="hidden print:block mb-6 text-center border-b-2 border-slate-800 pb-4">
+            <h1 className="text-2xl font-bold text-slate-900 uppercase">ใบสั่งซื้อ (Purchase Order)</h1>
+            <div className="flex justify-between mt-4 text-sm font-bold text-slate-700">
+              <span>เลขที่อ้างอิง: {title}</span>
+              <span>วันที่พิมพ์: {new Date().toLocaleDateString('th-TH')}</span>
+            </div>
+          </div>
+
+          <div className="bg-slate-50 p-4 border-b font-bold text-slate-800 print:hidden">รายงาน 1: รายการในบิลสั่งซื้อ (ชุดอุปกรณ์ และ สินค้ารายตัว)</div>
+          <table className="w-full text-sm text-left print:border-collapse print:w-full">
+            <thead className="bg-slate-50 border-b text-[10px] font-bold text-slate-400 uppercase tracking-widest print-table-header print:bg-slate-100 print:text-slate-800 print:text-xs">
+              <tr><th className="p-4 print:border print:border-slate-300">ประเภท</th><th className="p-4 print:border print:border-slate-300">รายการ</th><th className="p-4 text-center print:border print:border-slate-300">จำนวน</th><th className="p-4 text-right print:border print:border-slate-300">ราคาหน่วย</th><th className="p-4 text-right print:border print:border-slate-300">ราคารวม</th><th className="p-4 print:hidden text-center">จัดการ</th></tr>
             </thead>
-            <tbody className="divide-y text-[13px]">
+            <tbody className="divide-y text-[13px] print:divide-y-0">
               {orderLines.map((line, i) => {
                 let name = '';
                 let price = 0;
@@ -508,14 +540,14 @@ function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, 
                 }
 
                 return (
-                  <tr key={i} className="hover:bg-slate-50/50">
-                    <td className="p-4">
-                      <span className={`px-2 py-1 rounded text-[10px] font-bold ${isSet ? 'bg-indigo-100 text-indigo-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                  <tr key={i} className="hover:bg-slate-50/50 print-avoid-break">
+                    <td className="p-4 print:border print:border-slate-300">
+                      <span className={`px-2 py-1 rounded text-[10px] font-bold ${isSet ? 'bg-indigo-100 text-indigo-700' : 'bg-emerald-100 text-emerald-700'} print:bg-transparent print:p-0 print:text-slate-800 print:text-xs`}>
                         {isSet ? 'ชุดอุปกรณ์' : 'สินค้ารายชิ้น'}
                       </span>
                     </td>
-                    <td className="p-4 font-bold text-slate-700">{name}</td>
-                    <td className="p-4 text-center">
+                    <td className="p-4 font-bold text-slate-700 print:border print:border-slate-300 print:text-xs">{name}</td>
+                    <td className="p-4 text-center print:border print:border-slate-300 print:p-2">
                       <input 
                         type="number" 
                         min="1" 
@@ -526,21 +558,21 @@ function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, 
                           newLines[i].quantity = newQty;
                           setOrderLines(newLines);
                         }}
-                        className="w-20 border border-slate-300 rounded-lg p-1.5 text-center text-sm outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 font-bold text-indigo-600 bg-white shadow-sm"
+                        className="w-20 border border-slate-300 rounded-lg p-1.5 text-center text-sm outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 font-bold text-indigo-600 bg-white shadow-sm print:border-none print:shadow-none print:bg-transparent print:p-0 print:text-slate-900 print:w-auto"
                         title="แก้ไขจำนวน"
                       />
                     </td>
-                    <td className="p-4 text-right font-mono">฿{price.toLocaleString()}</td>
-                    <td className="p-4 text-right font-bold text-slate-900 font-mono">฿{(price * line.quantity).toLocaleString()}</td>
+                    <td className="p-4 text-right font-mono print:border print:border-slate-300 print:text-xs">฿{price.toLocaleString()}</td>
+                    <td className="p-4 text-right font-bold text-slate-900 font-mono print:border print:border-slate-300 print:text-xs">฿{(price * line.quantity).toLocaleString()}</td>
                     <td className="p-4 text-center print:hidden"><button type="button" onClick={(e) => { e.preventDefault(); setOrderLines(orderLines.filter((_, idx) => idx !== i)); }} className="text-red-400 p-1 hover:bg-red-50 rounded transition-colors"><Trash2 size={14}/></button></td>
                   </tr>
                 )
               })}
             </tbody>
             <tfoot>
-              <tr className="bg-indigo-50/50 font-bold">
-                <td colSpan="4" className="p-4 text-right">ยอดรวมรายงาน 1</td>
-                <td className="p-4 text-right text-indigo-700 font-mono">
+              <tr className="bg-indigo-50/50 font-bold print:bg-slate-100 print-avoid-break">
+                <td colSpan="4" className="p-4 text-right print:border print:border-slate-300">ยอดรวมทั้งสิ้น (Total)</td>
+                <td className="p-4 text-right text-indigo-700 font-mono print:border print:border-slate-300 print:text-slate-900">
                   ฿{orderLines.reduce((sum, line) => {
                     let p = 0;
                     if (line.type === 'set') p = getSetPrice(line.refId);
@@ -551,64 +583,88 @@ function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, 
                     return sum + (p * line.quantity);
                   }, 0).toLocaleString()}
                 </td>
-                <td></td>
+                <td className="print:hidden"></td>
               </tr>
             </tfoot>
           </table>
+          
+          {/* ส่วนเซ็นอนุมัติ (แสดงเฉพาะตอนพิมพ์ Report 1) */}
+          <div className="hidden print:flex justify-between mt-20 px-10">
+            <div className="text-center">
+              <div className="border-b border-slate-400 w-40 mx-auto mb-2"></div>
+              <div className="text-sm font-bold">ผู้จัดทำ (Prepared By)</div>
+              <div className="text-xs text-slate-500 mt-1">วันที่ (Date): ____/____/____</div>
+            </div>
+            <div className="text-center">
+              <div className="border-b border-slate-400 w-40 mx-auto mb-2"></div>
+              <div className="text-sm font-bold">ผู้อนุมัติ (Approved By)</div>
+              <div className="text-xs text-slate-500 mt-1">วันที่ (Date): ____/____/____</div>
+            </div>
+          </div>
         </div>
 
         {/* Report 2 */}
-        <div className="bg-white border rounded-2xl overflow-hidden shadow-sm">
-          <div className="bg-slate-50 p-4 border-b font-bold text-slate-800">รายงาน 2: สรุปรายการสินค้าย่อยทั้งหมด</div>
-          <table className="w-full text-sm text-left">
-            <thead className="bg-slate-50 border-b text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+        <div className={`bg-white border rounded-2xl overflow-hidden shadow-sm print:border-none print:shadow-none print:rounded-none ${printMode === 'report1' ? 'print:hidden' : ''}`}>
+          
+          {/* Header สำหรับหน้าพิมพ์ (Report 2) */}
+          <div className="hidden print:block mb-6 text-center border-b-2 border-slate-800 pb-4 print:mt-0">
+            <h1 className="text-2xl font-bold text-slate-900 uppercase">สรุปรายการเบิกสินค้าย่อย (Item Summary)</h1>
+            <div className="flex justify-between mt-4 text-sm font-bold text-slate-700">
+              <span>อ้างอิงจากใบสั่งซื้อ: {title}</span>
+              <span>วันที่พิมพ์: {new Date().toLocaleDateString('th-TH')}</span>
+            </div>
+          </div>
+
+          <div className="bg-slate-50 p-4 border-b font-bold text-slate-800 print:hidden">รายงาน 2: สรุปรายการสินค้าย่อยทั้งหมด</div>
+          <table className="w-full text-sm text-left print:border-collapse print:w-full">
+            <thead className="bg-slate-50 border-b text-[10px] font-bold text-slate-400 uppercase tracking-widest print-table-header print:bg-slate-100 print:text-slate-800 print:text-xs">
               <tr>
-                <th className="p-4">ซัพพลายเออร์</th>
-                <th className="p-4">ชื่อสินค้า</th>
-                <th className="p-4 text-right font-mono">ราคา (สุทธิ)</th>
-                <th className="p-4 text-center">MOQ (เงื่อนไข)</th>
-                <th className="p-4 text-center">รวมจำนวน</th>
-                <th className="p-4 text-right font-mono">ราคารวม</th>
+                <th className="p-4 print:border print:border-slate-300">ซัพพลายเออร์</th>
+                <th className="p-4 print:border print:border-slate-300">ชื่อสินค้า</th>
+                <th className="p-4 text-right font-mono print:border print:border-slate-300">ราคา (สุทธิ)</th>
+                <th className="p-4 text-center print:border print:border-slate-300">MOQ (เงื่อนไข)</th>
+                <th className="p-4 text-center print:border print:border-slate-300">รวมจำนวน</th>
+                <th className="p-4 text-right font-mono print:border print:border-slate-300">ราคารวม</th>
               </tr>
             </thead>
-            <tbody className="divide-y text-[13px]">
+            <tbody className="divide-y text-[13px] print:divide-y-0">
               {report2Rows.map((r, i) => {
                 const isMoqFailed = r.missingQty > 0;
                 const moqWarningTitle = r.moqType === 'multiple' ? `ต้องสั่งทีละ ${r.moq} ${r.unit}` : `ต้องสั่งขั้นต่ำ ${r.moq} ${r.unit}`;
                 const moqDisplay = r.moqType === 'multiple' ? `ทุกๆ ${r.moq}` : `ขั้นต่ำ ${r.moq}`;
 
                 return (
-                  <tr key={i} className={`${isMoqFailed ? 'bg-red-50/50' : 'hover:bg-slate-50/50'}`}>
-                    <td className="p-4"><span className="bg-slate-100 text-slate-600 px-2 py-1 rounded text-[10px] font-bold">{r.supplierName}</span></td>
-                    <td className="p-4">
+                  <tr key={i} className={`${isMoqFailed ? 'bg-red-50/50' : 'hover:bg-slate-50/50'} print-avoid-break print:bg-transparent`}>
+                    <td className="p-4 print:border print:border-slate-300 print:text-xs"><span className="bg-slate-100 text-slate-600 px-2 py-1 rounded text-[10px] font-bold print:bg-transparent print:p-0 print:text-slate-900 print:text-xs">{r.supplierName}</span></td>
+                    <td className="p-4 print:border print:border-slate-300 print:text-xs">
                       <div className="font-bold flex items-center">
                         {r.itemName}
-                        {isMoqFailed && <AlertTriangle size={14} className="text-red-500 ml-2" title={moqWarningTitle} />}
+                        {isMoqFailed && <AlertTriangle size={14} className="text-red-500 ml-2 print:hidden" title={moqWarningTitle} />}
                       </div>
-                      <div className="text-[11px] text-slate-400 mt-0.5">{r.code} | {r.category}</div>
+                      <div className="text-[11px] text-slate-400 mt-0.5 print:text-slate-600">{r.code} | {r.category}</div>
                     </td>
-                    <td className="p-4 text-right font-mono text-slate-500">
-                      {r.discountPercent > 0 && <div className="text-[10px] text-red-400 line-through">฿{r.pricePerUnit?.toLocaleString()}</div>}
-                      <div className="text-slate-700">฿{r.netPrice?.toLocaleString()}</div>
+                    <td className="p-4 text-right font-mono text-slate-500 print:border print:border-slate-300 print:text-slate-900 print:text-xs">
+                      {r.discountPercent > 0 && <div className="text-[10px] text-red-400 line-through print:hidden">฿{r.pricePerUnit?.toLocaleString()}</div>}
+                      <div className="text-slate-700 print:text-slate-900">฿{r.netPrice?.toLocaleString()}</div>
                     </td>
-                    <td className="p-4 text-center">
-                      {r.moq > 0 ? <span className="bg-amber-100 text-amber-700 px-2 py-1 rounded text-[11px] font-bold whitespace-nowrap">{moqDisplay}</span> : <span className="text-slate-300">-</span>}
+                    <td className="p-4 text-center print:border print:border-slate-300 print:text-xs">
+                      {r.moq > 0 ? <span className="bg-amber-100 text-amber-700 px-2 py-1 rounded text-[11px] font-bold whitespace-nowrap print:bg-transparent print:text-slate-900 print:p-0">{moqDisplay}</span> : <span className="text-slate-300 print:text-slate-600">-</span>}
                     </td>
-                    <td className="p-4 text-center">
-                      <div className={`font-bold ${isMoqFailed ? 'text-red-600' : 'text-indigo-600'}`}>{r.qty} {r.unit}</div>
+                    <td className="p-4 text-center print:border print:border-slate-300 print:text-xs">
+                      <div className={`font-bold ${isMoqFailed ? 'text-red-600' : 'text-indigo-600'} print:text-slate-900`}>{r.qty} {r.unit}</div>
                       {isMoqFailed && (
                         <button onClick={() => adjustMOQ(r.id, r.missingQty)} className="mt-2 text-[10px] font-bold bg-green-100 text-green-700 px-2 py-1 rounded flex items-center justify-center mx-auto hover:bg-green-200 transition-colors print:hidden shadow-sm">
                           <ArrowUpCircle size={12} className="mr-1"/> ปรับยอดอัตโนมัติ (+{r.missingQty})
                         </button>
                       )}
                     </td>
-                    <td className="p-4 text-right font-bold text-slate-900 font-mono">฿{r.total.toLocaleString()}</td>
+                    <td className="p-4 text-right font-bold text-slate-900 font-mono print:border print:border-slate-300 print:text-xs">฿{r.total.toLocaleString()}</td>
                   </tr>
                 );
               })}
             </tbody>
             <tfoot>
-              <tr className="bg-indigo-50/50 font-bold"><td colSpan="5" className="p-4 text-right">ยอดรวมรายงาน 2</td><td className="p-4 text-right text-indigo-700 font-mono">฿{report2Rows.reduce((sum, r) => sum + r.total, 0).toLocaleString()}</td></tr>
+              <tr className="bg-indigo-50/50 font-bold print:bg-slate-100 print-avoid-break"><td colSpan="5" className="p-4 text-right print:border print:border-slate-300">ยอดรวมทั้งสิ้น (Total)</td><td className="p-4 text-right text-indigo-700 font-mono print:border print:border-slate-300 print:text-slate-900">฿{report2Rows.reduce((sum, r) => sum + r.total, 0).toLocaleString()}</td></tr>
             </tfoot>
           </table>
         </div>
