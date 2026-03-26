@@ -515,7 +515,21 @@ function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, 
                       </span>
                     </td>
                     <td className="p-4 font-bold text-slate-700">{name}</td>
-                    <td className="p-4 text-center font-bold text-indigo-600">{line.quantity}</td>
+                    <td className="p-4 text-center">
+                      <input 
+                        type="number" 
+                        min="1" 
+                        value={line.quantity} 
+                        onChange={(e) => {
+                          const newQty = parseInt(e.target.value) || 1;
+                          const newLines = [...orderLines];
+                          newLines[i].quantity = newQty;
+                          setOrderLines(newLines);
+                        }}
+                        className="w-20 border border-slate-300 rounded-lg p-1.5 text-center text-sm outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 font-bold text-indigo-600 bg-white shadow-sm"
+                        title="แก้ไขจำนวน"
+                      />
+                    </td>
                     <td className="p-4 text-right font-mono">฿{price.toLocaleString()}</td>
                     <td className="p-4 text-right font-bold text-slate-900 font-mono">฿{(price * line.quantity).toLocaleString()}</td>
                     <td className="p-4 text-center print:hidden"><button type="button" onClick={(e) => { e.preventDefault(); setOrderLines(orderLines.filter((_, idx) => idx !== i)); }} className="text-red-400 p-1 hover:bg-red-50 rounded transition-colors"><Trash2 size={14}/></button></td>
