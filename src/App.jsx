@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { 
   ShoppingCart, Package, Users, Database, Plus, Trash2, 
   Save, FileText, ArrowLeft, Check, AlertCircle, Edit, List,
-  Printer, Upload, Search, X, AlertTriangle, ArrowUpCircle
+  Printer, Upload, Search, X, AlertTriangle, ArrowUpCircle, Download
 } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { 
@@ -26,6 +26,43 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
+
+// --- CSV Export Helper ---
+const exportToCSV = (filename, rows) => {
+  const processRow = function (row) {
+    let finalVal = '';
+    for (let j = 0; j < row.length; j++) {
+      let innerValue = row[j] === null || row[j] === undefined ? '' : row[j].toString();
+      if (row[j] instanceof Date) {
+        innerValue = row[j].toLocaleString();
+      };
+      let result = innerValue.replace(/"/g, '""');
+      if (result.search(/("|,|\n)/g) >= 0)
+        result = '"' + result + '"';
+      if (j > 0)
+        finalVal += ',';
+      finalVal += result;
+    }
+    return finalVal + '\n';
+  };
+
+  let csvFile = '\uFEFF'; // BOM for UTF-8 compatibility in Excel
+  for (let i = 0; i < rows.length; i++) {
+    csvFile += processRow(rows[i]);
+  }
+
+  const blob = new Blob([csvFile], { type: 'text/csv;charset=utf-8;' });
+  const link = document.createElement("a");
+  if (link.download !== undefined) {
+    const url = URL.createObjectURL(blob);
+    link.setAttribute("href", url);
+    link.setAttribute("download", filename);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }
+};
 
 // --- Custom Modal Component ---
 function CustomModal({ isOpen, type, title, message, onConfirm, onCancel }) {
@@ -437,6 +474,83 @@ function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, 
     }, 150);
   };
 
+  const exportReport1 = () => {
+    // รวมรายการที่ซ้ำกัน (Group identical lines)
+    const groupedLines = {};
+    orderLines.forEach(line => {
+      const key = `${line.type}-${line.refId}`;
+      if (!groupedLines[key]) {
+        groupedLines[key] = { ...line };
+      } else {
+        groupedLines[key].quantity += line.quantity;
+      }
+    });
+    const aggregatedLines = Object.values(groupedLines);
+
+    const headers = ['ประเภท', 'รหัสสินค้า', 'รายการ', 'ราคาเต็ม/หน่วย', 'ส่วนลด (%)', 'ราคา(สุทธิ)/หน่วย', 'เงื่อนไข MOQ', 'จำนวน', 'หน่วย', 'ราคารวม'];
+    const rows = aggregatedLines.map(line => {
+      let isSet = line.type === 'set';
+      let typeStr = isSet ? 'ชุดอุปกรณ์' : 'สินค้ารายชิ้น';
+      
+      let code = '-';
+      let name = '';
+      let fullPrice = 0;
+      let discount = 0;
+      let netPrice = 0;
+      let moqDisplay = '-';
+      let unit = '';
+
+      if (isSet) {
+        const s = equipmentSets.find(e => e.id === line.refId);
+        name = s?.name || 'Unknown Set';
+        netPrice = getSetPrice(line.refId);
+        fullPrice = netPrice; // ชุดอุปกรณ์แสดงราคาสุทธิรวมแล้ว
+        unit = 'ชุด';
+      } else {
+        const itm = items.find(e => e.id === line.refId);
+        code = itm?.code || '-';
+        name = itm?.itemName || 'Unknown Item';
+        fullPrice = itm?.pricePerUnit || 0;
+        discount = itm?.discountPercent || 0;
+        netPrice = fullPrice * (1 - discount / 100);
+        moqDisplay = (itm?.moq > 0) ? (itm?.moqType === 'multiple' ? `ทุกๆ ${itm.moq}` : `ขั้นต่ำ ${itm.moq}`) : '-';
+        unit = itm?.unit || '-';
+      }
+      return [typeStr, code, name, fullPrice, discount, netPrice, moqDisplay, line.quantity, unit, netPrice * line.quantity];
+    });
+
+    const total = rows.reduce((sum, r) => sum + r[9], 0);
+    rows.push(['', '', '', '', '', '', '', '', 'ยอดรวมทั้งสิ้น', total]);
+    
+    exportToCSV(`PO_Report1_${title || 'Untitled'}.csv`, [headers, ...rows]);
+  };
+
+  const exportReport2 = () => {
+    // report2Rows มีการรวมรายการสินค้าที่ซ้ำกันไว้แล้วจาก useMemo ด้านบน
+    const headers = ['ซัพพลายเออร์', 'รหัสสินค้า', 'หมวดหมู่', 'ชื่อสินค้า', 'ราคาเต็ม/หน่วย', 'ส่วนลด (%)', 'ราคา(สุทธิ)/หน่วย', 'เงื่อนไข MOQ', 'รวมจำนวน', 'หน่วย', 'ราคารวม'];
+    const rows = report2Rows.map(r => {
+      const moqDisplay = r.moq > 0 ? (r.moqType === 'multiple' ? `ทุกๆ ${r.moq}` : `ขั้นต่ำ ${r.moq}`) : '-';
+      return [
+        r.supplierName, 
+        r.code, 
+        r.category, 
+        r.itemName, 
+        r.pricePerUnit || 0,
+        r.discountPercent || 0,
+        r.netPrice, 
+        moqDisplay, 
+        r.qty, 
+        r.unit, 
+        r.total
+      ];
+    });
+
+    const total = rows.reduce((sum, r) => sum + r[10], 0);
+    rows.push(['', '', '', '', '', '', '', '', '', 'ยอดรวมทั้งสิ้น', total]);
+
+    exportToCSV(`PO_Report2_${title || 'Untitled'}.csv`, [headers, ...rows]);
+  };
+
   return (
     <div className="p-4 md:p-8 max-w-5xl mx-auto space-y-6 print:p-0 print:m-0 print:max-w-none print:w-full">
       {/* --- CSS สำหรับการพิมพ์ --- */}
@@ -518,7 +632,12 @@ function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, 
             </div>
           </div>
 
-          <div className="bg-slate-50 p-4 border-b font-bold text-slate-800 print:hidden">รายงาน 1: รายการในบิลสั่งซื้อ (ชุดอุปกรณ์ และ สินค้ารายตัว)</div>
+          <div className="bg-slate-50 p-4 border-b flex justify-between items-center print:hidden">
+            <span className="font-bold text-slate-800">รายงาน 1: รายการในบิลสั่งซื้อ (ชุดอุปกรณ์ และ สินค้ารายตัว)</span>
+            <button onClick={exportReport1} className="text-xs flex items-center bg-white border border-slate-200 px-3 py-1.5 rounded-lg text-slate-600 hover:bg-slate-50 shadow-sm font-medium transition-colors">
+              <Download size={14} className="mr-1.5"/> Export CSV
+            </button>
+          </div>
           <table className="w-full text-sm text-left print:border-collapse print:w-full">
             <thead className="bg-slate-50 border-b text-[10px] font-bold text-slate-400 uppercase tracking-widest print-table-header print:bg-slate-100 print:text-slate-800 print:text-xs">
               <tr><th className="p-4 print:border print:border-slate-300">ประเภท</th><th className="p-4 print:border print:border-slate-300">รายการ</th><th className="p-4 text-center print:border print:border-slate-300">จำนวน</th><th className="p-4 text-right print:border print:border-slate-300">ราคาหน่วย</th><th className="p-4 text-right print:border print:border-slate-300">ราคารวม</th><th className="p-4 print:hidden text-center">จัดการ</th></tr>
@@ -615,7 +734,12 @@ function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, 
             </div>
           </div>
 
-          <div className="bg-slate-50 p-4 border-b font-bold text-slate-800 print:hidden">รายงาน 2: สรุปรายการสินค้าย่อยทั้งหมด</div>
+          <div className="bg-slate-50 p-4 border-b flex justify-between items-center print:hidden">
+            <span className="font-bold text-slate-800">รายงาน 2: สรุปรายการสินค้าย่อยทั้งหมด</span>
+            <button onClick={exportReport2} className="text-xs flex items-center bg-white border border-slate-200 px-3 py-1.5 rounded-lg text-slate-600 hover:bg-slate-50 shadow-sm font-medium transition-colors">
+              <Download size={14} className="mr-1.5"/> Export CSV
+            </button>
+          </div>
           <table className="w-full text-sm text-left print:border-collapse print:w-full">
             <thead className="bg-slate-50 border-b text-[10px] font-bold text-slate-400 uppercase tracking-widest print-table-header print:bg-slate-100 print:text-slate-800 print:text-xs">
               <tr>
