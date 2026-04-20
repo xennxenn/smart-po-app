@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { 
   ShoppingCart, Package, Users, Database, Plus, Trash2, 
   Save, FileText, ArrowLeft, Check, AlertCircle, Edit, List,
-  Printer, Upload, Search, X, AlertTriangle, ArrowUpCircle, Download
+  Printer, Upload, Search, X, AlertTriangle, ArrowUpCircle, Download, Globe
 } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { 
@@ -27,6 +27,18 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
+// --- Currency & Exchange Rate Helpers ---
+const DEFAULT_RATES = { THB: 1, USD: 0.028, EUR: 0.025, JPY: 4.2, CNY: 0.2, GBP: 0.022, SGD: 0.038 };
+
+const convertPrice = (amount, fromCur, toCur, ratesObj) => {
+  if (!ratesObj || !ratesObj[fromCur] || !ratesObj[toCur]) return amount;
+  return amount * (ratesObj[toCur] / ratesObj[fromCur]);
+};
+
+const formatCur = (amount, cur = 'THB') => {
+  return new Intl.NumberFormat('th-TH', { style: 'currency', currency: cur }).format(amount);
+};
+
 // --- CSV Export Helper ---
 const exportToCSV = (filename, rows) => {
   const processRow = function (row) {
@@ -46,7 +58,7 @@ const exportToCSV = (filename, rows) => {
     return finalVal + '\n';
   };
 
-  let csvFile = '\uFEFF'; // BOM for UTF-8 compatibility in Excel
+  let csvFile = '\uFEFF'; 
   for (let i = 0; i < rows.length; i++) {
     csvFile += processRow(rows[i]);
   }
@@ -91,6 +103,7 @@ function CustomModal({ isOpen, type, title, message, onConfirm, onCancel }) {
 export default function App() {
   const [user, setUser] = useState(null);
   const [loadingAuth, setLoadingAuth] = useState(true);
+  const [exchangeRates, setExchangeRates] = useState(DEFAULT_RATES);
 
   // App Data State
   const [suppliers, setSuppliers] = useState([]);
@@ -100,79 +113,54 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('pos');
   const [editingPoId, setEditingPoId] = useState(null);
 
-  // Modal State
   const [modal, setModal] = useState({ isOpen: false, type: 'confirm', title: '', message: '', onConfirm: null, onCancel: null });
 
   const showConfirm = (title, message, onConfirmCallback) => {
     setModal({
-      isOpen: true,
-      type: 'confirm',
-      title,
-      message,
-      onConfirm: () => {
-        if(onConfirmCallback) onConfirmCallback();
-        setModal(prev => ({ ...prev, isOpen: false }));
-      },
+      isOpen: true, type: 'confirm', title, message,
+      onConfirm: () => { if(onConfirmCallback) onConfirmCallback(); setModal(prev => ({ ...prev, isOpen: false })); },
       onCancel: () => setModal(prev => ({ ...prev, isOpen: false }))
     });
   };
 
   const showAlert = (title, message) => {
     setModal({
-      isOpen: true,
-      type: 'alert',
-      title,
-      message,
+      isOpen: true, type: 'alert', title, message,
       onConfirm: () => setModal(prev => ({ ...prev, isOpen: false }))
     });
   };
 
+  // Fetch Exchange Rates on load
+  useEffect(() => {
+    fetch('https://open.er-api.com/v6/latest/THB')
+      .then(res => res.json())
+      .then(data => { if(data && data.rates) setExchangeRates(data.rates); })
+      .catch(err => console.error('Fetch rates error, using defaults', err));
+  }, []);
+
   useEffect(() => {
     const initAuth = async () => {
-      try {
-        await signInAnonymously(auth);
-      } catch (error) {
-        console.error("Auth error:", error);
-        setLoadingAuth(false);
-      }
+      try { await signInAnonymously(auth); } 
+      catch (error) { console.error("Auth error:", error); setLoadingAuth(false); }
     };
     initAuth();
-
-    const unsubscribe = onAuthStateChanged(auth, (u) => {
-      setUser(u);
-      setLoadingAuth(false);
-    });
+    const unsubscribe = onAuthStateChanged(auth, (u) => { setUser(u); setLoadingAuth(false); });
     return () => unsubscribe();
   }, []);
 
   useEffect(() => {
     if (!user) return;
     const basePath = `users/${user.uid}`;
+    const unsubSuppliers = onSnapshot(collection(db, `${basePath}/suppliers`), (snap) => setSuppliers(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+    const unsubItems = onSnapshot(collection(db, `${basePath}/items`), (snap) => setItems(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+    const unsubSets = onSnapshot(collection(db, `${basePath}/equipmentSets`), (snap) => setEquipmentSets(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+    const unsubPOs = onSnapshot(collection(db, `${basePath}/purchaseOrders`), (snap) => setPurchaseOrders(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
 
-    const unsubSuppliers = onSnapshot(collection(db, `${basePath}/suppliers`), (snap) => {
-      setSuppliers(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    }, err => console.error("Firestore error (suppliers):", err));
-
-    const unsubItems = onSnapshot(collection(db, `${basePath}/items`), (snap) => {
-      setItems(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    }, err => console.error("Firestore error (items):", err));
-
-    const unsubSets = onSnapshot(collection(db, `${basePath}/equipmentSets`), (snap) => {
-      setEquipmentSets(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    }, err => console.error("Firestore error (sets):", err));
-
-    const unsubPOs = onSnapshot(collection(db, `${basePath}/purchaseOrders`), (snap) => {
-      setPurchaseOrders(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    }, err => console.error("Firestore error (pos):", err));
-
-    return () => {
-      unsubSuppliers(); unsubItems(); unsubSets(); unsubPOs();
-    };
+    return () => { unsubSuppliers(); unsubItems(); unsubSets(); unsubPOs(); };
   }, [user]);
 
-  const getItemPrice = (itemId) => items.find(i => i.id === itemId)?.pricePerUnit || 0;
-  
-  const getSetPrice = (setId) => {
+  // ฟังก์ชันคำนวณราคาชุดอุปกรณ์แบบอิงสกุลเงินปลายทาง
+  const getSetPrice = (setId, targetCur = 'THB', ratesObj = exchangeRates) => {
     const eqSet = equipmentSets.find(s => s.id === setId);
     if (!eqSet) return 0;
     return eqSet.items.reduce((total, setItem) => {
@@ -180,7 +168,9 @@ export default function App() {
       const price = item?.pricePerUnit || 0;
       const discount = item?.discountPercent || 0;
       const netPrice = price * (1 - discount / 100);
-      return total + (netPrice * setItem.quantity);
+      const itemCur = item?.currency || 'THB';
+      const convertedPrice = convertPrice(netPrice, itemCur, targetCur, ratesObj);
+      return total + (convertedPrice * setItem.quantity);
     }, 0);
   };
 
@@ -191,11 +181,11 @@ export default function App() {
       const s1Id = 'SUP001';
       await setDoc(doc(db, `${basePath}/suppliers`, s1Id), { brandName: 'IT Solutions', companyName: 'IT Solutions Co.,Ltd.', address: 'Bangkok', branch: 'HQ', taxId: '1234567890123' });
       const i1Id = 'ITM001';
-      await setDoc(doc(db, `${basePath}/items`, i1Id), { supplierId: s1Id, code: '885001', category: 'IT', itemName: 'Wireless Mouse (เมาส์ไร้สาย)', pricePerUnit: 590, unit: 'อัน', discountPercent: 0, moq: 5, moqType: 'minimum' });
+      await setDoc(doc(db, `${basePath}/items`, i1Id), { supplierId: s1Id, code: '885001', category: 'IT', itemName: 'Wireless Mouse (เมาส์ไร้สาย)', pricePerUnit: 20, currency: 'USD', unit: 'อัน', discountPercent: 0, moq: 5, moqType: 'minimum' });
       const i2Id = 'ITM002';
-      await setDoc(doc(db, `${basePath}/items`, i2Id), { supplierId: s1Id, code: '885002', category: 'IT', itemName: 'Wireless Mouse (Premium)', pricePerUnit: 990, unit: 'อัน', discountPercent: 5, moq: 2, moqType: 'multiple' });
+      await setDoc(doc(db, `${basePath}/items`, i2Id), { supplierId: s1Id, code: '885002', category: 'IT', itemName: 'Keyboard (Premium)', pricePerUnit: 990, currency: 'THB', unit: 'อัน', discountPercent: 5, moq: 2, moqType: 'multiple' });
       const set1Id = 'SET001';
-      await setDoc(doc(db, `${basePath}/equipmentSets`, set1Id), { supplierId: s1Id, name: 'ชุดเริ่มต้น IT', items: [{ itemId: i1Id, quantity: 1 }] });
+      await setDoc(doc(db, `${basePath}/equipmentSets`, set1Id), { supplierId: s1Id, name: 'ชุดเริ่มต้น IT', currency: 'THB', items: [{ itemId: i1Id, quantity: 1 }] });
       showAlert("สำเร็จ", "สร้างข้อมูลตัวอย่างสำเร็จ!");
     } catch (e) {
       showAlert("เกิดข้อผิดพลาด", "โปรดเช็ค Firestore Rules");
@@ -224,7 +214,6 @@ export default function App() {
   return (
     <>
       <div className="min-h-screen bg-slate-50 flex flex-col md:flex-row font-sans print:bg-white text-slate-900">
-        {/* Sidebar */}
         <aside className="w-full md:w-64 bg-white border-r border-slate-200 flex-shrink-0 shadow-sm print:hidden">
           <div className="p-6 border-b border-slate-100 flex items-center space-x-3">
             <div className="bg-indigo-600 p-2 rounded-lg text-white shadow-lg shadow-indigo-200">
@@ -259,16 +248,14 @@ export default function App() {
             <POEditor 
               poId={editingPoId}
               onBack={() => setActiveTab('pos')}
-              items={items}
-              equipmentSets={equipmentSets}
-              suppliers={suppliers}
-              getSetPrice={getSetPrice}
-              db={db} basePath={`users/${user.uid}`} showAlert={showAlert}
+              items={items} equipmentSets={equipmentSets} suppliers={suppliers}
+              getSetPrice={getSetPrice} db={db} basePath={`users/${user.uid}`} 
+              showAlert={showAlert} exchangeRates={exchangeRates} convertPrice={convertPrice} formatCur={formatCur}
             />
           )}
           {activeTab === 'suppliers' && <SupplierMaster suppliers={suppliers} db={db} basePath={`users/${user.uid}`} showConfirm={showConfirm} />}
-          {activeTab === 'items' && <ItemMaster items={items} suppliers={suppliers} db={db} basePath={`users/${user.uid}`} showConfirm={showConfirm} showAlert={showAlert} />}
-          {activeTab === 'sets' && <EquipmentSetMaster sets={equipmentSets} items={items} getSetPrice={getSetPrice} db={db} basePath={`users/${user.uid}`} showConfirm={showConfirm} showAlert={showAlert} suppliers={suppliers} />}
+          {activeTab === 'items' && <ItemMaster items={items} suppliers={suppliers} db={db} basePath={`users/${user.uid}`} showConfirm={showConfirm} showAlert={showAlert} formatCur={formatCur} />}
+          {activeTab === 'sets' && <EquipmentSetMaster sets={equipmentSets} items={items} getSetPrice={getSetPrice} db={db} basePath={`users/${user.uid}`} showConfirm={showConfirm} showAlert={showAlert} suppliers={suppliers} convertPrice={convertPrice} formatCur={formatCur} exchangeRates={exchangeRates} />}
         </main>
       </div>
       <CustomModal {...modal} />
@@ -327,7 +314,9 @@ function POList({ purchaseOrders, onCreateNew, onEdit, db, basePath, showConfirm
                       <td className="p-5 font-bold text-indigo-600 cursor-pointer" onClick={() => onEdit(po.id)}>{po.title || po.id}</td>
                       <td className="p-5 text-slate-500">{po.createdAt?.toDate ? po.createdAt.toDate().toLocaleDateString('th-TH') : '-'}</td>
                       <td className="p-5 text-center"><span className="bg-slate-100 px-2 py-1 rounded text-xs font-bold text-slate-600">{lineCount} รายการ</span></td>
-                      <td className="p-5 text-right font-bold text-slate-900 font-mono">฿{(po.totalAmount || 0).toLocaleString()}</td>
+                      <td className="p-5 text-right font-bold text-slate-900 font-mono">
+                        {new Intl.NumberFormat('th-TH', { style: 'currency', currency: po.currency || 'THB' }).format(po.totalAmount || 0)}
+                      </td>
                       <td className="p-5 text-center flex justify-center space-x-2">
                         <button onClick={() => onEdit(po.id)} className="p-2 text-slate-400 hover:text-indigo-600 transition-colors"><Edit size={16}/></button>
                         <button onClick={(e) => { e.preventDefault(); handleDelete(po.id); }} className="p-2 text-slate-400 hover:text-red-600 transition-colors"><Trash2 size={16}/></button>
@@ -345,16 +334,19 @@ function POList({ purchaseOrders, onCreateNew, onEdit, db, basePath, showConfirm
 }
 
 // --- View: PO Editor ---
-function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, db, basePath, showAlert }) {
+function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, db, basePath, showAlert, exchangeRates, convertPrice, formatCur }) {
   const [title, setTitle] = useState('');
-  const [orderLines, setOrderLines] = useState([]); // [{ type: 'set'|'item', refId, quantity }]
+  const [orderLines, setOrderLines] = useState([]); 
   
-  const [lineType, setLineType] = useState('item'); // Added state for selecting type
+  const [lineType, setLineType] = useState('item'); 
   const [searchLineTerm, setSearchLineTerm] = useState('');
   const [currentLineSelection, setCurrentLineSelection] = useState('');
   const [currentQty, setCurrentQty] = useState(1);
   const [saving, setSaving] = useState(false);
-  const [printMode, setPrintMode] = useState(null); // 'report1' | 'report2' | null
+  const [printMode, setPrintMode] = useState(null); 
+  
+  const [poCurrency, setPoCurrency] = useState('THB');
+  const [savedRates, setSavedRates] = useState(null); // Lock rates for historical POs
 
   useEffect(() => {
     if (poId) {
@@ -362,17 +354,21 @@ function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, 
         if (snap.exists()) {
           const data = snap.data();
           setTitle(data.title || '');
-          // รองรับระบบเก่าที่เคยใช้ .sets
           const loadedLines = data.orderLines || (data.sets || []).map(s => ({ type: 'set', refId: s.setId, quantity: s.quantity }));
           setOrderLines(loadedLines);
+          setPoCurrency(data.currency || 'THB');
+          setSavedRates(data.exchangeRates || null);
         }
       });
     } else {
       setTitle(`PO-${Date.now().toString().slice(-6)}`);
+      setPoCurrency('THB');
+      setSavedRates(null);
     }
   }, [poId, db, basePath]);
 
-  // ตัวเลือกสำหรับเพิ่มในบิล
+  const effectiveRates = savedRates || exchangeRates;
+
   const filteredSets = equipmentSets.filter(s => s.name.toLowerCase().includes(searchLineTerm.toLowerCase()));
   const filteredItems = items.filter(i => 
     i.code?.toLowerCase().includes(searchLineTerm.toLowerCase()) || 
@@ -397,9 +393,16 @@ function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, 
     return Object.entries(map).map(([id, qty]) => {
       const item = items.find(i => i.id === id);
       const sup = suppliers.find(su => su.id === item?.supplierId);
+      
+      const itemCur = item?.currency || 'THB';
       const price = item?.pricePerUnit || 0;
       const discount = item?.discountPercent || 0;
-      const netPrice = price * (1 - discount / 100);
+      const netPriceOrig = price * (1 - discount / 100);
+      
+      // Convert to PO Currency
+      const convertedFullPrice = convertPrice(price, itemCur, poCurrency, effectiveRates);
+      const convertedNetPrice = convertPrice(netPriceOrig, itemCur, poCurrency, effectiveRates);
+
       const moq = item?.moq || 0;
       const moqType = item?.moqType || 'minimum';
       
@@ -416,17 +419,17 @@ function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, 
         ...item, 
         supplierName: sup?.brandName || 'Unknown', 
         qty, 
-        netPrice, 
-        total: netPrice * qty,
+        fullPrice: convertedFullPrice,
+        netPrice: convertedNetPrice, 
+        total: convertedNetPrice * qty,
         missingQty 
       };
     }).sort((a,b) => a.supplierName.localeCompare(b.supplierName));
-  }, [orderLines, equipmentSets, items, suppliers]);
+  }, [orderLines, equipmentSets, items, suppliers, poCurrency, effectiveRates]);
 
   const handleSave = async () => {
     if (!title.trim() || orderLines.length === 0) return;
     
-    // --- ตรวจสอบเงื่อนไข MOQ ทั้ง 2 รูปแบบ ---
     const failedMoq = report2Rows.filter(r => r.missingQty > 0);
     if (failedMoq.length > 0) {
       const msgs = failedMoq.map(r => {
@@ -439,17 +442,23 @@ function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, 
 
     setSaving(true);
     const total = orderLines.reduce((sum, line) => {
-      if (line.type === 'set') return sum + (getSetPrice(line.refId) * line.quantity);
+      if (line.type === 'set') return sum + getSetPrice(line.refId, poCurrency, effectiveRates) * line.quantity;
       if (line.type === 'item') {
         const item = items.find(i => i.id === line.refId);
-        const netPrice = (item?.pricePerUnit || 0) * (1 - (item?.discountPercent || 0) / 100);
-        return sum + (netPrice * line.quantity);
+        const itemCur = item?.currency || 'THB';
+        const netPriceOrig = (item?.pricePerUnit || 0) * (1 - (item?.discountPercent || 0) / 100);
+        return sum + convertPrice(netPriceOrig, itemCur, poCurrency, effectiveRates) * line.quantity;
       }
       return sum;
     }, 0);
 
     await setDoc(doc(db, `${basePath}/purchaseOrders`, poId || `PO-${Date.now()}`), { 
-      title, orderLines, totalAmount: total, createdAt: serverTimestamp() 
+      title, 
+      orderLines, 
+      totalAmount: total, 
+      currency: poCurrency,
+      exchangeRates: effectiveRates, // Snapshot rates
+      createdAt: serverTimestamp() 
     }, { merge: true });
     
     onBack();
@@ -475,7 +484,6 @@ function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, 
   };
 
   const exportReport1 = () => {
-    // รวมรายการที่ซ้ำกัน (Group identical lines)
     const groupedLines = {};
     orderLines.forEach(line => {
       const key = `${line.type}-${line.refId}`;
@@ -487,7 +495,7 @@ function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, 
     });
     const aggregatedLines = Object.values(groupedLines);
 
-    const headers = ['ประเภท', 'รหัสสินค้า', 'รายการ', 'ราคาเต็ม/หน่วย', 'ส่วนลด (%)', 'ราคา(สุทธิ)/หน่วย', 'เงื่อนไข MOQ', 'จำนวน', 'หน่วย', 'ราคารวม'];
+    const headers = ['ประเภท', 'รหัสสินค้า', 'รายการ', `ราคาเต็ม/หน่วย (${poCurrency})`, 'ส่วนลด (%)', `ราคา(สุทธิ)/หน่วย (${poCurrency})`, 'เงื่อนไข MOQ', 'จำนวน', 'หน่วย', `ราคารวม (${poCurrency})`];
     const rows = aggregatedLines.map(line => {
       let isSet = line.type === 'set';
       let typeStr = isSet ? 'ชุดอุปกรณ์' : 'สินค้ารายชิ้น';
@@ -503,31 +511,36 @@ function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, 
       if (isSet) {
         const s = equipmentSets.find(e => e.id === line.refId);
         name = s?.name || 'Unknown Set';
-        netPrice = getSetPrice(line.refId);
-        fullPrice = netPrice; // ชุดอุปกรณ์แสดงราคาสุทธิรวมแล้ว
+        netPrice = getSetPrice(line.refId, poCurrency, effectiveRates);
+        fullPrice = netPrice; 
         unit = 'ชุด';
       } else {
         const itm = items.find(e => e.id === line.refId);
         code = itm?.code || '-';
         name = itm?.itemName || 'Unknown Item';
-        fullPrice = itm?.pricePerUnit || 0;
+        const itemCur = itm?.currency || 'THB';
+        
+        const origFull = itm?.pricePerUnit || 0;
         discount = itm?.discountPercent || 0;
-        netPrice = fullPrice * (1 - discount / 100);
+        const origNet = origFull * (1 - discount / 100);
+
+        fullPrice = convertPrice(origFull, itemCur, poCurrency, effectiveRates);
+        netPrice = convertPrice(origNet, itemCur, poCurrency, effectiveRates);
+
         moqDisplay = (itm?.moq > 0) ? (itm?.moqType === 'multiple' ? `ทุกๆ ${itm.moq}` : `ขั้นต่ำ ${itm.moq}`) : '-';
         unit = itm?.unit || '-';
       }
-      return [typeStr, code, name, fullPrice, discount, netPrice, moqDisplay, line.quantity, unit, netPrice * line.quantity];
+      return [typeStr, code, name, fullPrice.toFixed(2), discount, netPrice.toFixed(2), moqDisplay, line.quantity, unit, (netPrice * line.quantity).toFixed(2)];
     });
 
-    const total = rows.reduce((sum, r) => sum + r[9], 0);
-    rows.push(['', '', '', '', '', '', '', '', 'ยอดรวมทั้งสิ้น', total]);
+    const total = rows.reduce((sum, r) => sum + parseFloat(r[9]), 0);
+    rows.push(['', '', '', '', '', '', '', '', 'ยอดรวมทั้งสิ้น', total.toFixed(2)]);
     
     exportToCSV(`PO_Report1_${title || 'Untitled'}.csv`, [headers, ...rows]);
   };
 
   const exportReport2 = () => {
-    // report2Rows มีการรวมรายการสินค้าที่ซ้ำกันไว้แล้วจาก useMemo ด้านบน
-    const headers = ['ซัพพลายเออร์', 'รหัสสินค้า', 'หมวดหมู่', 'ชื่อสินค้า', 'ราคาเต็ม/หน่วย', 'ส่วนลด (%)', 'ราคา(สุทธิ)/หน่วย', 'เงื่อนไข MOQ', 'รวมจำนวน', 'หน่วย', 'ราคารวม'];
+    const headers = ['ซัพพลายเออร์', 'รหัสสินค้า', 'หมวดหมู่', 'ชื่อสินค้า', `ราคาเต็ม/หน่วย (${poCurrency})`, 'ส่วนลด (%)', `ราคา(สุทธิ)/หน่วย (${poCurrency})`, 'เงื่อนไข MOQ', 'รวมจำนวน', 'หน่วย', `ราคารวม (${poCurrency})`];
     const rows = report2Rows.map(r => {
       const moqDisplay = r.moq > 0 ? (r.moqType === 'multiple' ? `ทุกๆ ${r.moq}` : `ขั้นต่ำ ${r.moq}`) : '-';
       return [
@@ -535,25 +548,24 @@ function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, 
         r.code, 
         r.category, 
         r.itemName, 
-        r.pricePerUnit || 0,
+        (r.fullPrice || 0).toFixed(2),
         r.discountPercent || 0,
-        r.netPrice, 
+        r.netPrice.toFixed(2), 
         moqDisplay, 
         r.qty, 
         r.unit, 
-        r.total
+        r.total.toFixed(2)
       ];
     });
 
-    const total = rows.reduce((sum, r) => sum + r[10], 0);
-    rows.push(['', '', '', '', '', '', '', '', '', 'ยอดรวมทั้งสิ้น', total]);
+    const total = rows.reduce((sum, r) => sum + parseFloat(r[10]), 0);
+    rows.push(['', '', '', '', '', '', '', '', '', 'ยอดรวมทั้งสิ้น', total.toFixed(2)]);
 
     exportToCSV(`PO_Report2_${title || 'Untitled'}.csv`, [headers, ...rows]);
   };
 
   return (
     <div className="p-4 md:p-8 max-w-5xl mx-auto space-y-6 print:p-0 print:m-0 print:max-w-none print:w-full">
-      {/* --- CSS สำหรับการพิมพ์ --- */}
       <style type="text/css">
         {`
           @media print {
@@ -568,7 +580,20 @@ function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, 
       <div className="flex justify-between items-center print:hidden bg-white p-4 rounded-2xl border shadow-sm">
         <div className="flex items-center space-x-3">
           <button onClick={onBack} className="p-2 hover:bg-slate-100 rounded-full"><ArrowLeft size={20}/></button>
-          <input type="text" value={title} onChange={e => setTitle(e.target.value)} className="font-bold text-lg border-b border-transparent focus:border-indigo-500 outline-none px-2 py-1 w-64"/>
+          <input type="text" value={title} onChange={e => setTitle(e.target.value)} className="font-bold text-lg border-b border-transparent focus:border-indigo-500 outline-none px-2 py-1 w-48" placeholder="เลขที่ PO"/>
+          
+          <div className="flex items-center bg-slate-50 border rounded-lg px-2 py-1">
+            <Globe size={14} className="text-slate-400 mr-2"/>
+            <select value={poCurrency} onChange={e => setPoCurrency(e.target.value)} className="bg-transparent text-sm font-bold outline-none text-indigo-700">
+              <option value="THB">THB</option>
+              <option value="USD">USD</option>
+              <option value="EUR">EUR</option>
+              <option value="JPY">JPY</option>
+              <option value="CNY">CNY</option>
+              <option value="GBP">GBP</option>
+              <option value="SGD">SGD</option>
+            </select>
+          </div>
         </div>
         <div className="flex space-x-2">
           <button onClick={() => handlePrint('report1')} className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl font-bold flex items-center shadow-sm hover:bg-slate-200 transition-colors text-sm"><Printer size={16} className="mr-2"/> พิมพ์รายงาน 1</button>
@@ -604,11 +629,13 @@ function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, 
             <select value={currentLineSelection} onChange={e => setCurrentLineSelection(e.target.value)} className="flex-1 border rounded-xl p-3 outline-none focus:ring-2 focus:ring-indigo-500 bg-white">
               <option value="">-- {lineType === 'set' ? 'คลิกเพื่อเลือกชุดอุปกรณ์' : 'คลิกเพื่อเลือกสินค้ารายตัว'} --</option>
               {lineType === 'set' && filteredSets.map(s => (
-                <option key={`set-${s.id}`} value={`set|${s.id}`}>{s.name} (฿{getSetPrice(s.id).toLocaleString()})</option>
+                <option key={`set-${s.id}`} value={`set|${s.id}`}>{s.name} ({formatCur(getSetPrice(s.id, poCurrency, effectiveRates), poCurrency)})</option>
               ))}
               {lineType === 'item' && filteredItems.map(i => {
-                 const netPrice = (i.pricePerUnit || 0) * (1 - (i.discountPercent || 0) / 100);
-                 return <option key={`item-${i.id}`} value={`item|${i.id}`}>[{i.code}] {i.itemName} (฿{netPrice.toLocaleString()})</option>
+                 const itemCur = i.currency || 'THB';
+                 const netPriceOrig = (i.pricePerUnit || 0) * (1 - (i.discountPercent || 0) / 100);
+                 const convertedNet = convertPrice(netPriceOrig, itemCur, poCurrency, effectiveRates);
+                 return <option key={`item-${i.id}`} value={`item|${i.id}`}>[{i.code}] {i.itemName} ({formatCur(convertedNet, poCurrency)})</option>
               })}
             </select>
             <div className="flex gap-2">
@@ -623,7 +650,6 @@ function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, 
         {/* Report 1 */}
         <div className={`bg-white border rounded-2xl overflow-hidden shadow-sm print:border-none print:shadow-none print:rounded-none ${printMode === 'report2' ? 'print:hidden' : ''}`}>
           
-          {/* Header สำหรับหน้าพิมพ์ (Report 1) */}
           <div className="hidden print:block mb-6 text-center border-b-2 border-slate-800 pb-4">
             <h1 className="text-2xl font-bold text-slate-900 uppercase">ใบสั่งซื้อ (Purchase Order)</h1>
             <div className="flex justify-between mt-4 text-sm font-bold text-slate-700">
@@ -651,11 +677,13 @@ function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, 
                 if (isSet) {
                   const s = equipmentSets.find(e => e.id === line.refId);
                   name = s?.name || 'Unknown Set';
-                  price = getSetPrice(line.refId);
+                  price = getSetPrice(line.refId, poCurrency, effectiveRates);
                 } else {
                   const itm = items.find(e => e.id === line.refId);
                   name = itm ? `[${itm.code}] ${itm.itemName}` : 'Unknown Item';
-                  price = (itm?.pricePerUnit || 0) * (1 - (itm?.discountPercent || 0)/100);
+                  const itemCur = itm?.currency || 'THB';
+                  const netOrig = (itm?.pricePerUnit || 0) * (1 - (itm?.discountPercent || 0)/100);
+                  price = convertPrice(netOrig, itemCur, poCurrency, effectiveRates);
                 }
 
                 return (
@@ -668,9 +696,7 @@ function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, 
                     <td className="p-4 font-bold text-slate-700 print:border print:border-slate-300 print:text-xs">{name}</td>
                     <td className="p-4 text-center print:border print:border-slate-300 print:p-2">
                       <input 
-                        type="number" 
-                        min="1" 
-                        value={line.quantity} 
+                        type="number" min="1" value={line.quantity} 
                         onChange={(e) => {
                           const newQty = parseInt(e.target.value) || 1;
                           const newLines = [...orderLines];
@@ -681,8 +707,8 @@ function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, 
                         title="แก้ไขจำนวน"
                       />
                     </td>
-                    <td className="p-4 text-right font-mono print:border print:border-slate-300 print:text-xs">฿{price.toLocaleString()}</td>
-                    <td className="p-4 text-right font-bold text-slate-900 font-mono print:border print:border-slate-300 print:text-xs">฿{(price * line.quantity).toLocaleString()}</td>
+                    <td className="p-4 text-right font-mono print:border print:border-slate-300 print:text-xs">{formatCur(price, poCurrency)}</td>
+                    <td className="p-4 text-right font-bold text-slate-900 font-mono print:border print:border-slate-300 print:text-xs">{formatCur(price * line.quantity, poCurrency)}</td>
                     <td className="p-4 text-center print:hidden"><button type="button" onClick={(e) => { e.preventDefault(); setOrderLines(orderLines.filter((_, idx) => idx !== i)); }} className="text-red-400 p-1 hover:bg-red-50 rounded transition-colors"><Trash2 size={14}/></button></td>
                   </tr>
                 )
@@ -692,22 +718,23 @@ function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, 
               <tr className="bg-indigo-50/50 font-bold print:bg-slate-100 print-avoid-break">
                 <td colSpan="4" className="p-4 text-right print:border print:border-slate-300">ยอดรวมทั้งสิ้น (Total)</td>
                 <td className="p-4 text-right text-indigo-700 font-mono print:border print:border-slate-300 print:text-slate-900">
-                  ฿{orderLines.reduce((sum, line) => {
+                  {formatCur(orderLines.reduce((sum, line) => {
                     let p = 0;
-                    if (line.type === 'set') p = getSetPrice(line.refId);
+                    if (line.type === 'set') p = getSetPrice(line.refId, poCurrency, effectiveRates);
                     else {
                       const itm = items.find(e => e.id === line.refId);
-                      p = (itm?.pricePerUnit || 0) * (1 - (itm?.discountPercent || 0)/100);
+                      const itemCur = itm?.currency || 'THB';
+                      const netOrig = (itm?.pricePerUnit || 0) * (1 - (itm?.discountPercent || 0)/100);
+                      p = convertPrice(netOrig, itemCur, poCurrency, effectiveRates);
                     }
                     return sum + (p * line.quantity);
-                  }, 0).toLocaleString()}
+                  }, 0), poCurrency)}
                 </td>
                 <td className="print:hidden"></td>
               </tr>
             </tfoot>
           </table>
           
-          {/* ส่วนเซ็นอนุมัติ (แสดงเฉพาะตอนพิมพ์ Report 1) */}
           <div className="hidden print:flex justify-between mt-20 px-10">
             <div className="text-center">
               <div className="border-b border-slate-400 w-40 mx-auto mb-2"></div>
@@ -725,7 +752,6 @@ function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, 
         {/* Report 2 */}
         <div className={`bg-white border rounded-2xl overflow-hidden shadow-sm print:border-none print:shadow-none print:rounded-none ${printMode === 'report1' ? 'print:hidden' : ''}`}>
           
-          {/* Header สำหรับหน้าพิมพ์ (Report 2) */}
           <div className="hidden print:block mb-6 text-center border-b-2 border-slate-800 pb-4 print:mt-0">
             <h1 className="text-2xl font-bold text-slate-900 uppercase">สรุปรายการเบิกสินค้าย่อย (Item Summary)</h1>
             <div className="flex justify-between mt-4 text-sm font-bold text-slate-700">
@@ -768,8 +794,8 @@ function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, 
                       <div className="text-[11px] text-slate-400 mt-0.5 print:text-slate-600">{r.code} | {r.category}</div>
                     </td>
                     <td className="p-4 text-right font-mono text-slate-500 print:border print:border-slate-300 print:text-slate-900 print:text-xs">
-                      {r.discountPercent > 0 && <div className="text-[10px] text-red-400 line-through print:hidden">฿{r.pricePerUnit?.toLocaleString()}</div>}
-                      <div className="text-slate-700 print:text-slate-900">฿{r.netPrice?.toLocaleString()}</div>
+                      {r.discountPercent > 0 && <div className="text-[10px] text-red-400 line-through print:hidden">{formatCur(r.fullPrice, poCurrency)}</div>}
+                      <div className="text-slate-700 print:text-slate-900">{formatCur(r.netPrice, poCurrency)}</div>
                     </td>
                     <td className="p-4 text-center print:border print:border-slate-300 print:text-xs">
                       {r.moq > 0 ? <span className="bg-amber-100 text-amber-700 px-2 py-1 rounded text-[11px] font-bold whitespace-nowrap print:bg-transparent print:text-slate-900 print:p-0">{moqDisplay}</span> : <span className="text-slate-300 print:text-slate-600">-</span>}
@@ -782,13 +808,13 @@ function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, 
                         </button>
                       )}
                     </td>
-                    <td className="p-4 text-right font-bold text-slate-900 font-mono print:border print:border-slate-300 print:text-xs">฿{r.total.toLocaleString()}</td>
+                    <td className="p-4 text-right font-bold text-slate-900 font-mono print:border print:border-slate-300 print:text-xs">{formatCur(r.total, poCurrency)}</td>
                   </tr>
                 );
               })}
             </tbody>
             <tfoot>
-              <tr className="bg-indigo-50/50 font-bold print:bg-slate-100 print-avoid-break"><td colSpan="5" className="p-4 text-right print:border print:border-slate-300">ยอดรวมทั้งสิ้น (Total)</td><td className="p-4 text-right text-indigo-700 font-mono print:border print:border-slate-300 print:text-slate-900">฿{report2Rows.reduce((sum, r) => sum + r.total, 0).toLocaleString()}</td></tr>
+              <tr className="bg-indigo-50/50 font-bold print:bg-slate-100 print-avoid-break"><td colSpan="5" className="p-4 text-right print:border print:border-slate-300">ยอดรวมทั้งสิ้น (Total)</td><td className="p-4 text-right text-indigo-700 font-mono print:border print:border-slate-300 print:text-slate-900">{formatCur(report2Rows.reduce((sum, r) => sum + r.total, 0), poCurrency)}</td></tr>
             </tfoot>
           </table>
         </div>
@@ -798,13 +824,14 @@ function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, 
 }
 
 // --- View: Equipment Set Master ---
-function EquipmentSetMaster({ sets, items, getSetPrice, db, basePath, showConfirm, showAlert, suppliers }) {
+function EquipmentSetMaster({ sets, items, getSetPrice, db, basePath, showConfirm, showAlert, suppliers, convertPrice, formatCur, exchangeRates }) {
   const [name, setName] = useState('');
   const [setItems, setSetItems] = useState([]);
   const [curItem, setCurItem] = useState('');
   const [curQty, setCurQty] = useState(1);
   const [editingId, setEditingId] = useState(null);
   const [selectedSupId, setSelectedSupId] = useState('');
+  const [setCurrency, setSetCurrency] = useState('THB'); // เพิ่ม State สกุลเงินชุดอุปกรณ์
   
   const [searchTerm, setSearchTerm] = useState('');
   const [showImportModal, setShowImportModal] = useState(false);
@@ -818,19 +845,24 @@ function EquipmentSetMaster({ sets, items, getSetPrice, db, basePath, showConfir
     return setItems.reduce((acc, si) => {
       const item = items.find(it => it.id === si.itemId);
       if (item) {
+        const itemCur = item.currency || 'THB';
         const price = item.pricePerUnit || 0;
         const discount = item.discountPercent || 0;
-        acc.totalFullPrice += price * si.quantity;
-        acc.totalNetPrice += price * (1 - discount / 100) * si.quantity;
+        
+        // แปลงค่าเงินย่อยให้เป็นค่าเงินของชุดอุปกรณ์
+        const convertedPrice = convertPrice(price, itemCur, setCurrency, exchangeRates);
+        
+        acc.totalFullPrice += convertedPrice * si.quantity;
+        acc.totalNetPrice += convertedPrice * (1 - discount / 100) * si.quantity;
       }
       return acc;
     }, { totalFullPrice: 0, totalNetPrice: 0 });
-  }, [setItems, items]);
+  }, [setItems, items, setCurrency, exchangeRates]);
 
   const handleSave = async () => {
     if (!name.trim() || setItems.length === 0 || !selectedSupId) return;
     const id = editingId || `SET-${Date.now()}`;
-    await setDoc(doc(db, `${basePath}/equipmentSets`, id), { name, items: setItems, supplierId: selectedSupId });
+    await setDoc(doc(db, `${basePath}/equipmentSets`, id), { name, items: setItems, supplierId: selectedSupId, currency: setCurrency });
     setName(''); setSetItems([]); setEditingId(null);
   };
 
@@ -911,7 +943,18 @@ function EquipmentSetMaster({ sets, items, getSetPrice, db, basePath, showConfir
               </label>
             </div>
             
-            <input value={name} onChange={e => setName(e.target.value)} placeholder="ระบุชื่อชุดอุปกรณ์ (เช่น ชุดพนักงานใหม่)" className="w-full border rounded-xl p-3 outline-none focus:ring-2 focus:ring-indigo-500 font-bold bg-slate-50 border-slate-200"/>
+            <div className="flex gap-2">
+              <input value={name} onChange={e => setName(e.target.value)} placeholder="ระบุชื่อชุดอุปกรณ์ (เช่น ชุดพนักงานใหม่)" className="flex-1 border rounded-xl p-3 outline-none focus:ring-2 focus:ring-indigo-500 font-bold bg-slate-50 border-slate-200"/>
+              <select value={setCurrency} onChange={e => setSetCurrency(e.target.value)} className="w-32 border rounded-xl p-3 outline-none focus:ring-2 focus:ring-indigo-500 bg-white font-bold text-indigo-700">
+                <option value="THB">THB</option>
+                <option value="USD">USD</option>
+                <option value="EUR">EUR</option>
+                <option value="JPY">JPY</option>
+                <option value="CNY">CNY</option>
+                <option value="GBP">GBP</option>
+                <option value="SGD">SGD</option>
+              </select>
+            </div>
             
             <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm space-y-3">
               <div className="relative">
@@ -929,16 +972,18 @@ function EquipmentSetMaster({ sets, items, getSetPrice, db, basePath, showConfir
                 <select value={curItem} onChange={e => setCurItem(e.target.value)} className="flex-1 border rounded-lg p-2.5 text-sm outline-none focus:border-indigo-500 bg-white text-slate-700">
                   <option value="">-- เลือกสินค้ารายตัว --</option>
                   {filteredItemsForSet.map(i => {
-                    const netPrice = (i.pricePerUnit || 0) * (1 - (i.discountPercent || 0) / 100);
+                    const itemCur = i.currency || 'THB';
+                    const netPriceOrig = (i.pricePerUnit || 0) * (1 - (i.discountPercent || 0) / 100);
+                    const convertedPrice = convertPrice(netPriceOrig, itemCur, setCurrency, exchangeRates);
                     return (
                       <option key={i.id} value={i.id}>
-                        [{i.code}] {i.itemName} ({i.category}) - ฿{netPrice.toLocaleString()}
+                        [{i.code}] {i.itemName} ({i.category}) - {formatCur(convertedPrice, setCurrency)}
                       </option>
                     )
                   })}
                 </select>
                 <div className="flex gap-2">
-                  <input type="number" min="1" value={curQty} onChange={e => setCurQty(parseInt(e.target.value)||1)} className="w-20 border rounded-lg p-2.5 outline-none"/>
+                  <input type="number" min="1" value={curQty} onChange={e => setCurQty(parseInt(e.target.value)||1)} className="w-20 border rounded-lg p-2.5 outline-none text-center"/>
                   <button onClick={() => { if(curItem) { setSetItems([...setItems, {itemId: curItem, quantity: curQty}]); setCurItem(''); } }} className="bg-slate-800 text-white px-6 rounded-lg font-bold hover:bg-slate-700">เพิ่ม</button>
                 </div>
               </div>
@@ -948,8 +993,11 @@ function EquipmentSetMaster({ sets, items, getSetPrice, db, basePath, showConfir
               {setItems.length === 0 && <p className="text-center py-8 text-slate-400 text-sm border border-dashed rounded-xl">ยังไม่มีสินค้าในชุดนี้</p>}
               {setItems.map((si, i) => {
                 const itemData = items.find(it => it.id === si.itemId);
-                const netPrice = (itemData?.pricePerUnit || 0) * (1 - (itemData?.discountPercent || 0) / 100);
-                const rowTotal = netPrice * si.quantity;
+                const itemCur = itemData?.currency || 'THB';
+                const netPriceOrig = (itemData?.pricePerUnit || 0) * (1 - (itemData?.discountPercent || 0) / 100);
+                const convertedNetPrice = convertPrice(netPriceOrig, itemCur, setCurrency, exchangeRates);
+                const rowTotal = convertedNetPrice * si.quantity;
+
                 return (
                   <div key={i} className="flex justify-between items-center bg-indigo-50/30 px-4 py-2 rounded-xl border border-indigo-100 group">
                     <div className="flex flex-col">
@@ -957,12 +1005,12 @@ function EquipmentSetMaster({ sets, items, getSetPrice, db, basePath, showConfir
                         <span className="text-indigo-600 font-mono text-xs mr-2">[{itemData?.code}]</span> 
                         {itemData?.itemName}
                       </span>
-                      <span className="text-[11px] text-slate-500 mt-0.5">@ ฿{netPrice.toLocaleString()} / {itemData?.unit}</span>
+                      <span className="text-[11px] text-slate-500 mt-0.5">@ {formatCur(convertedNetPrice, setCurrency)} / {itemData?.unit}</span>
                     </div>
                     <div className="flex items-center space-x-4">
                       <div className="text-right">
                         <span className="block font-bold text-indigo-600">x{si.quantity}</span>
-                        <span className="block text-[11px] font-mono text-slate-600 font-bold">฿{rowTotal.toLocaleString()}</span>
+                        <span className="block text-[11px] font-mono text-slate-600 font-bold">{formatCur(rowTotal, setCurrency)}</span>
                       </div>
                       <button type="button" onClick={(e) => { e.preventDefault(); setSetItems(setItems.filter((_, idx) => idx !== i)); }} className="text-red-400 hover:bg-red-50 p-1.5 rounded-lg transition-colors"><Trash2 size={14}/></button>
                     </div>
@@ -974,15 +1022,15 @@ function EquipmentSetMaster({ sets, items, getSetPrice, db, basePath, showConfir
             {setItems.length > 0 && (
               <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 mt-2 space-y-2">
                 <div className="flex justify-between text-sm text-slate-500 font-medium">
-                  <span>ยอดรวมราคาเต็ม:</span>
+                  <span>ยอดรวมราคาเต็ม ({setCurrency}):</span>
                   <span className={`font-mono ${totalFullPrice > totalNetPrice ? 'line-through text-red-400' : 'text-slate-600'}`}>
-                    ฿{totalFullPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    {formatCur(totalFullPrice, setCurrency)}
                   </span>
                 </div>
                 <div className="flex justify-between text-base font-bold text-slate-800 border-t border-slate-200 pt-2">
-                  <span>ยอดรวมสุทธิ (หลังหักส่วนลด):</span>
+                  <span>ยอดรวมสุทธิ ({setCurrency}):</span>
                   <span className="font-mono text-indigo-600">
-                    ฿{totalNetPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    {formatCur(totalNetPrice, setCurrency)}
                   </span>
                 </div>
               </div>
@@ -993,7 +1041,7 @@ function EquipmentSetMaster({ sets, items, getSetPrice, db, basePath, showConfir
                 {editingId ? 'บันทึกการแก้ไขชุดอุปกรณ์' : 'บันทึกชุดอุปกรณ์ใหม่'}
               </button>
               {editingId && (
-                 <button onClick={() => { setEditingId(null); setName(''); setSetItems([]); }} className="px-6 bg-white border border-slate-300 text-slate-600 rounded-2xl font-bold hover:bg-slate-50 transition-all">ยกเลิกแก้ไข</button>
+                 <button onClick={() => { setEditingId(null); setName(''); setSetItems([]); setSetCurrency('THB'); }} className="px-6 bg-white border border-slate-300 text-slate-600 rounded-2xl font-bold hover:bg-slate-50 transition-all">ยกเลิกแก้ไข</button>
               )}
             </div>
           </div>
@@ -1002,52 +1050,55 @@ function EquipmentSetMaster({ sets, items, getSetPrice, db, basePath, showConfir
 
       {selectedSupId && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {filteredSets.map(s => (
-            <div key={s.id} className="bg-white p-5 rounded-2xl border shadow-sm flex flex-col group transition-all hover:shadow-md border-slate-100">
-              <div className="flex justify-between items-start mb-4">
-                <h3 className="font-bold text-slate-800">{s.name}</h3>
-                <div className="flex space-x-1">
-                  <button type="button" onClick={() => { setEditingId(s.id); setName(s.name); setSetItems(s.items); window.scrollTo({top:0, behavior:'smooth'}); }} className="p-2 text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"><Edit size={16}/></button>
-                  <button type="button" onClick={(e) => { 
-                    e.preventDefault(); 
-                    e.stopPropagation(); 
-                    showConfirm('ยืนยันการลบ', 'ต้องการลบชุดอุปกรณ์นี้ใช่หรือไม่?', async () => {
-                      try { 
-                        await deleteDoc(doc(db, `${basePath}/equipmentSets`, s.id)); 
-                        if (editingId === s.id) { 
-                          setEditingId(null); 
-                          setName(''); 
-                          setSetItems([]); 
+          {filteredSets.map(s => {
+            const displayCur = s.currency || 'THB';
+            return (
+              <div key={s.id} className="bg-white p-5 rounded-2xl border shadow-sm flex flex-col group transition-all hover:shadow-md border-slate-100">
+                <div className="flex justify-between items-start mb-4">
+                  <h3 className="font-bold text-slate-800">{s.name}</h3>
+                  <div className="flex space-x-1">
+                    <button type="button" onClick={() => { setEditingId(s.id); setName(s.name); setSetItems(s.items); setSetCurrency(s.currency || 'THB'); window.scrollTo({top:0, behavior:'smooth'}); }} className="p-2 text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"><Edit size={16}/></button>
+                    <button type="button" onClick={(e) => { 
+                      e.preventDefault(); 
+                      e.stopPropagation(); 
+                      showConfirm('ยืนยันการลบ', 'ต้องการลบชุดอุปกรณ์นี้ใช่หรือไม่?', async () => {
+                        try { 
+                          await deleteDoc(doc(db, `${basePath}/equipmentSets`, s.id)); 
+                          if (editingId === s.id) { 
+                            setEditingId(null); setName(''); setSetItems([]); setSetCurrency('THB');
+                          } 
+                        } catch(err) { 
+                          showAlert('ข้อผิดพลาด', 'ไม่สามารถลบได้: ' + err.message); 
                         } 
-                      } catch(err) { 
-                        showAlert('ข้อผิดพลาด', 'ไม่สามารถลบได้: ' + err.message); 
-                      } 
-                    });
-                  }} className="p-2 text-red-400 hover:bg-red-50 rounded-lg transition-colors"><Trash2 size={16}/></button>
+                      });
+                    }} className="p-2 text-red-400 hover:bg-red-50 rounded-lg transition-colors"><Trash2 size={16}/></button>
+                  </div>
                 </div>
+                <ul className="text-[12px] text-slate-500 flex-1 space-y-2">
+                  {s.items.map((it, idx) => {
+                    const itemData = items.find(x => x.id === it.itemId);
+                    const itemCur = itemData?.currency || 'THB';
+                    const netPriceOrig = (itemData?.pricePerUnit || 0) * (1 - (itemData?.discountPercent || 0) / 100);
+                    const convertedPrice = convertPrice(netPriceOrig, itemCur, displayCur, exchangeRates);
+                    const rowTotal = convertedPrice * it.quantity;
+                    return (
+                      <li key={idx} className="flex justify-between items-start border-b border-slate-50 pb-1.5 last:border-0 last:pb-0">
+                        <div className="flex flex-col truncate pr-2">
+                          <span className="truncate font-medium text-slate-700">• [{itemData?.code}] {itemData?.itemName}</span>
+                          <span className="text-[10px] text-slate-400 mt-0.5 ml-2">@ {formatCur(convertedPrice, displayCur)} / {itemData?.unit}</span>
+                        </div>
+                        <div className="flex flex-col items-end whitespace-nowrap">
+                          <span className="font-medium text-slate-700">x{it.quantity}</span>
+                          <span className="font-bold text-indigo-600 text-[10px] font-mono mt-0.5">{formatCur(rowTotal, displayCur)}</span>
+                        </div>
+                      </li>
+                    )
+                  })}
+                </ul>
+                <div className="pt-4 mt-4 border-t flex justify-between font-bold text-sm text-indigo-700"><span>ราคาต่อชุด ({displayCur})</span><span>{formatCur(getSetPrice(s.id, displayCur, exchangeRates), displayCur)}</span></div>
               </div>
-              <ul className="text-[12px] text-slate-500 flex-1 space-y-2">
-                {s.items.map((it, idx) => {
-                  const itemData = items.find(x => x.id === it.itemId);
-                  const netPrice = (itemData?.pricePerUnit || 0) * (1 - (itemData?.discountPercent || 0) / 100);
-                  const rowTotal = netPrice * it.quantity;
-                  return (
-                    <li key={idx} className="flex justify-between items-start border-b border-slate-50 pb-1.5 last:border-0 last:pb-0">
-                      <div className="flex flex-col truncate pr-2">
-                        <span className="truncate font-medium text-slate-700">• [{itemData?.code}] {itemData?.itemName}</span>
-                        <span className="text-[10px] text-slate-400 mt-0.5 ml-2">@ ฿{netPrice.toLocaleString()} / {itemData?.unit}</span>
-                      </div>
-                      <div className="flex flex-col items-end whitespace-nowrap">
-                        <span className="font-medium text-slate-700">x{it.quantity}</span>
-                        <span className="font-bold text-indigo-600 text-[10px] font-mono mt-0.5">฿{rowTotal.toLocaleString()}</span>
-                      </div>
-                    </li>
-                  )
-                })}
-              </ul>
-              <div className="pt-4 mt-4 border-t flex justify-between font-bold text-sm text-indigo-700"><span>ราคาต่อชุด</span><span>฿{getSetPrice(s.id).toLocaleString()}</span></div>
-            </div>
-          ))}
+            )
+          })}
           {filteredSets.length === 0 && <div className="col-span-1 md:col-span-2 text-center p-8 text-slate-400 bg-white border border-dashed rounded-2xl">ซัพพลายเออร์นี้ยังไม่มีการจัดชุดอุปกรณ์</div>}
         </div>
       )}
@@ -1079,7 +1130,7 @@ function EquipmentSetMaster({ sets, items, getSetPrice, db, basePath, showConfir
                         </div>
                         <div className="text-sm">
                           <div className="font-bold text-slate-800">{opt.itemName} <span className="text-[10px] text-slate-400">({opt.category})</span></div>
-                          <div className="text-xs text-slate-500 mt-0.5">ราคา: ฿{opt.pricePerUnit?.toLocaleString()} / {opt.unit}</div>
+                          <div className="text-xs text-slate-500 mt-0.5">ราคา: {formatCur(opt.pricePerUnit, opt.currency || 'THB')} / {opt.unit}</div>
                         </div>
                       </label>
                     ))}
@@ -1104,8 +1155,8 @@ function EquipmentSetMaster({ sets, items, getSetPrice, db, basePath, showConfir
 }
 
 // --- View: Item Master ---
-function ItemMaster({ items, suppliers, db, basePath, showConfirm, showAlert }) {
-  const [form, setForm] = useState({ code: '', category: '', itemName: '', pricePerUnit: '', unit: '', discountPercent: '', moq: '', moqType: 'minimum' });
+function ItemMaster({ items, suppliers, db, basePath, showConfirm, showAlert, formatCur }) {
+  const [form, setForm] = useState({ code: '', category: '', itemName: '', pricePerUnit: '', currency: 'THB', unit: '', discountPercent: '', moq: '', moqType: 'minimum' });
   const [selectedSupId, setSelectedSupId] = useState('');
   const [editingItemId, setEditingItemId] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -1126,6 +1177,7 @@ function ItemMaster({ items, suppliers, db, basePath, showConfirm, showAlert }) 
       category: item.category || '',
       itemName: item.itemName || '',
       pricePerUnit: item.pricePerUnit || '',
+      currency: item.currency || 'THB',
       unit: item.unit || '',
       discountPercent: item.discountPercent || '',
       moq: item.moq || '',
@@ -1136,7 +1188,7 @@ function ItemMaster({ items, suppliers, db, basePath, showConfirm, showAlert }) 
 
   const cancelEdit = () => {
     setEditingItemId(null);
-    setForm({ code: '', category: '', itemName: '', pricePerUnit: '', unit: '', discountPercent: '', moq: '', moqType: 'minimum' });
+    setForm({ code: '', category: '', itemName: '', pricePerUnit: '', currency: 'THB', unit: '', discountPercent: '', moq: '', moqType: 'minimum' });
   };
 
   const handleSaveItem = async (e) => {
@@ -1175,6 +1227,7 @@ function ItemMaster({ items, suppliers, db, basePath, showConfirm, showAlert }) 
           let discountPercent = 0;
           let moq = 0;
           let moqType = 'minimum';
+          let currency = 'THB';
           
           if (cols.length >= 5) unit = cols[4].trim();
           if (cols.length >= 6) discountPercent = parseFloat(cols[5]) || 0;
@@ -1182,7 +1235,9 @@ function ItemMaster({ items, suppliers, db, basePath, showConfirm, showAlert }) 
           if (cols.length >= 8) {
             const mt = cols[7].trim().toLowerCase();
             if (mt === 'multiple' || mt === 'ทุกๆ' || mt === 'ทวีคูณ') moqType = 'multiple';
+            else moqType = 'minimum';
           }
+          if (cols.length >= 9) currency = cols[8].trim().toUpperCase() || 'THB';
 
           await setDoc(doc(db, `${basePath}/items`, `ITM-${Date.now()}-${Math.random()}`), { 
             supplierId: selectedSupId, 
@@ -1193,7 +1248,8 @@ function ItemMaster({ items, suppliers, db, basePath, showConfirm, showAlert }) 
             unit: unit,
             discountPercent: discountPercent, 
             moq: moq,
-            moqType: moqType
+            moqType: moqType,
+            currency: currency
           });
         }
       }
@@ -1232,7 +1288,18 @@ function ItemMaster({ items, suppliers, db, basePath, showConfirm, showAlert }) 
                 <div className="md:col-span-3"><input required placeholder="Category *" value={form.category} onChange={e => setForm({...form, category: e.target.value})} className="w-full border rounded-lg p-2.5 text-sm outline-none focus:border-indigo-500 bg-white shadow-sm"/></div>
                 <div className="md:col-span-7"><input required placeholder="Item Name *" value={form.itemName} onChange={e => setForm({...form, itemName: e.target.value})} className="w-full border rounded-lg p-2.5 text-sm outline-none focus:border-indigo-500 bg-white shadow-sm"/></div>
                 
-                <div className="md:col-span-3"><input required type="number" placeholder="Price/Unit *" value={form.pricePerUnit} onChange={e => setForm({...form, pricePerUnit: e.target.value})} className="w-full border rounded-lg p-2.5 text-sm outline-none focus:border-indigo-500 bg-white shadow-sm"/></div>
+                <div className="md:col-span-3 flex gap-1">
+                  <input required type="number" placeholder="Price/Unit *" value={form.pricePerUnit} onChange={e => setForm({...form, pricePerUnit: e.target.value})} className="w-2/3 border rounded-lg p-2.5 text-sm outline-none focus:border-indigo-500 bg-white shadow-sm"/>
+                  <select value={form.currency} onChange={e => setForm({...form, currency: e.target.value})} className="w-1/3 border rounded-lg p-2.5 text-[10px] font-bold outline-none focus:border-indigo-500 bg-slate-100 text-indigo-700">
+                    <option value="THB">THB</option>
+                    <option value="USD">USD</option>
+                    <option value="EUR">EUR</option>
+                    <option value="JPY">JPY</option>
+                    <option value="CNY">CNY</option>
+                    <option value="GBP">GBP</option>
+                    <option value="SGD">SGD</option>
+                  </select>
+                </div>
                 <div className="md:col-span-3"><input placeholder="Unit (หน่วย)" value={form.unit} onChange={e => setForm({...form, unit: e.target.value})} className="w-full border rounded-lg p-2.5 text-sm outline-none focus:border-indigo-500 bg-white shadow-sm"/></div>
                 <div className="md:col-span-2"><input type="number" placeholder="% Discount" value={form.discountPercent} onChange={e => setForm({...form, discountPercent: e.target.value})} className="w-full border rounded-lg p-2.5 text-sm outline-none focus:border-indigo-500 bg-white shadow-sm"/></div>
                 <div className="md:col-span-2 flex gap-1">
@@ -1281,6 +1348,7 @@ function ItemMaster({ items, suppliers, db, basePath, showConfirm, showAlert }) 
                   {filteredItems.map(item => {
                     const netPrice = (item.pricePerUnit || 0) * (1 - (item.discountPercent || 0) / 100);
                     const moqDisplay = item.moqType === 'multiple' ? `ทุกๆ ${item.moq}` : `ขั้นต่ำ ${item.moq}`;
+                    const itemCur = item.currency || 'THB';
                     return (
                       <tr key={item.id} className="bg-white hover:bg-slate-50 transition-colors">
                         <td className="p-3">
@@ -1295,8 +1363,8 @@ function ItemMaster({ items, suppliers, db, basePath, showConfirm, showAlert }) 
                           {item.moq > 0 ? <span className="bg-amber-100 text-amber-700 px-2 py-1 rounded text-[11px] font-bold">{moqDisplay}</span> : <span className="text-slate-300">-</span>}
                         </td>
                         <td className="p-3 text-right font-mono">
-                          {item.discountPercent > 0 && <span className="text-red-400 line-through text-[10px] mr-2">฿{item.pricePerUnit?.toLocaleString()}</span>}
-                          <span className="font-bold text-indigo-600">฿{netPrice.toLocaleString()}</span>
+                          {item.discountPercent > 0 && <span className="text-red-400 line-through text-[10px] mr-2">{formatCur(item.pricePerUnit, itemCur)}</span>}
+                          <span className="font-bold text-indigo-600">{formatCur(netPrice, itemCur)}</span>
                           {item.discountPercent > 0 && <div className="text-[10px] text-green-600 mt-0.5">ลด {item.discountPercent}%</div>}
                         </td>
                         <td className="p-3 text-center">
