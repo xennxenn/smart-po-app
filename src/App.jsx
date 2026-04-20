@@ -241,7 +241,7 @@ export default function App() {
               purchaseOrders={purchaseOrders} 
               onCreateNew={() => { setEditingPoId(null); setActiveTab('po-editor'); }}
               onEdit={(id) => { setEditingPoId(id); setActiveTab('po-editor'); }}
-              db={db} basePath={`users/${user.uid}`} showConfirm={showConfirm}
+              db={db} basePath={`users/${user.uid}`} showConfirm={showConfirm} suppliers={suppliers}
             />
           )}
           {activeTab === 'po-editor' && (
@@ -273,7 +273,7 @@ function SidebarButton({ icon: Icon, label, active, onClick }) {
 }
 
 // --- View: PO List ---
-function POList({ purchaseOrders, onCreateNew, onEdit, db, basePath, showConfirm }) {
+function POList({ purchaseOrders, onCreateNew, onEdit, db, basePath, showConfirm, suppliers }) {
   const handleDelete = async (id) => {
     showConfirm('ยืนยันการลบ', 'ต้องการลบใบสั่งซื้อนี้ใช่หรือไม่?', async () => {
       await deleteDoc(doc(db, `${basePath}/purchaseOrders`, id));
@@ -301,6 +301,7 @@ function POList({ purchaseOrders, onCreateNew, onEdit, db, basePath, showConfirm
                 <tr>
                   <th className="p-5">เลขที่อ้างอิง</th>
                   <th className="p-5">วันที่</th>
+                  <th className="p-5">ซัพพลายเออร์</th>
                   <th className="p-5 text-center">จำนวนรายการ</th>
                   <th className="p-5 text-right">ยอดรวม</th>
                   <th className="p-5 text-center">จัดการ</th>
@@ -309,10 +310,13 @@ function POList({ purchaseOrders, onCreateNew, onEdit, db, basePath, showConfirm
               <tbody className="text-sm divide-y divide-slate-100">
                 {purchaseOrders.map(po => {
                   const lineCount = po.orderLines ? po.orderLines.length : (po.sets?.length || 0);
+                  const sup = suppliers.find(s => s.id === po.supplierId);
+                  const supName = sup ? (sup.brandName || sup.companyName) : '-';
                   return (
                     <tr key={po.id} className="hover:bg-slate-50/50">
                       <td className="p-5 font-bold text-indigo-600 cursor-pointer" onClick={() => onEdit(po.id)}>{po.title || po.id}</td>
                       <td className="p-5 text-slate-500">{po.createdAt?.toDate ? po.createdAt.toDate().toLocaleDateString('th-TH') : '-'}</td>
+                      <td className="p-5 text-slate-700 font-medium">{supName}</td>
                       <td className="p-5 text-center"><span className="bg-slate-100 px-2 py-1 rounded text-xs font-bold text-slate-600">{lineCount} รายการ</span></td>
                       <td className="p-5 text-right font-bold text-slate-900 font-mono">
                         {new Intl.NumberFormat('th-TH', { style: 'currency', currency: po.currency || 'THB' }).format(po.totalAmount || 0)}
@@ -338,6 +342,7 @@ function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, 
   const [title, setTitle] = useState('');
   const [orderLines, setOrderLines] = useState([]); 
   
+  const [selectedSupId, setSelectedSupId] = useState(''); // เพิ่ม state สำหรับซัพพลายเออร์
   const [lineType, setLineType] = useState('item'); 
   const [searchLineTerm, setSearchLineTerm] = useState('');
   const [currentLineSelection, setCurrentLineSelection] = useState('');
@@ -346,7 +351,7 @@ function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, 
   const [printMode, setPrintMode] = useState(null); 
   
   const [poCurrency, setPoCurrency] = useState('THB');
-  const [savedRates, setSavedRates] = useState(null); // Lock rates for historical POs
+  const [savedRates, setSavedRates] = useState(null); 
 
   useEffect(() => {
     if (poId) {
@@ -358,21 +363,45 @@ function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, 
           setOrderLines(loadedLines);
           setPoCurrency(data.currency || 'THB');
           setSavedRates(data.exchangeRates || null);
+          if (data.supplierId) {
+            setSelectedSupId(data.supplierId);
+          }
         }
       });
     } else {
       setTitle(`PO-${Date.now().toString().slice(-6)}`);
       setPoCurrency('THB');
       setSavedRates(null);
+      setOrderLines([]);
+      setSelectedSupId('');
     }
   }, [poId, db, basePath]);
 
+  // Backward compatibility สำหรับ PO เก่าที่ยังไม่มี supplierId
+  useEffect(() => {
+    if (poId && !selectedSupId && orderLines.length > 0 && equipmentSets.length > 0 && items.length > 0) {
+      const firstLine = orderLines[0];
+      if (firstLine.type === 'set') {
+        const s = equipmentSets.find(e => e.id === firstLine.refId);
+        if (s && s.supplierId) setSelectedSupId(s.supplierId);
+      } else {
+        const i = items.find(e => e.id === firstLine.refId);
+        if (i && i.supplierId) setSelectedSupId(i.supplierId);
+      }
+    }
+  }, [poId, selectedSupId, orderLines, equipmentSets, items]);
+
   const effectiveRates = savedRates || exchangeRates;
 
-  const filteredSets = equipmentSets.filter(s => s.name.toLowerCase().includes(searchLineTerm.toLowerCase()));
+  // กรองชุดอุปกรณ์และสินค้าเฉพาะของซัพพลายเออร์ที่เลือก
+  const filteredSets = equipmentSets.filter(s => 
+    s.supplierId === selectedSupId && 
+    s.name.toLowerCase().includes(searchLineTerm.toLowerCase())
+  );
   const filteredItems = items.filter(i => 
-    i.code?.toLowerCase().includes(searchLineTerm.toLowerCase()) || 
-    i.itemName?.toLowerCase().includes(searchLineTerm.toLowerCase())
+    i.supplierId === selectedSupId && 
+    (i.code?.toLowerCase().includes(searchLineTerm.toLowerCase()) || 
+     i.itemName?.toLowerCase().includes(searchLineTerm.toLowerCase()))
   );
 
   const report2Rows = useMemo(() => {
@@ -428,7 +457,7 @@ function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, 
   }, [orderLines, equipmentSets, items, suppliers, poCurrency, effectiveRates]);
 
   const handleSave = async () => {
-    if (!title.trim() || orderLines.length === 0) return;
+    if (!title.trim() || orderLines.length === 0 || !selectedSupId) return;
     
     const failedMoq = report2Rows.filter(r => r.missingQty > 0);
     if (failedMoq.length > 0) {
@@ -458,6 +487,7 @@ function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, 
       totalAmount: total, 
       currency: poCurrency,
       exchangeRates: effectiveRates, // Snapshot rates
+      supplierId: selectedSupId, // บันทึก supplier ID ลงไปใน PO
       createdAt: serverTimestamp() 
     }, { merge: true });
     
@@ -600,227 +630,245 @@ function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, 
         <div className="flex space-x-2">
           <button onClick={() => handlePrint('report1')} className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl font-bold flex items-center shadow-sm hover:bg-slate-200 transition-colors text-sm"><Printer size={16} className="mr-2"/> พิมพ์รายงาน 1</button>
           <button onClick={() => handlePrint('report2')} className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl font-bold flex items-center shadow-sm hover:bg-slate-200 transition-colors text-sm"><Printer size={16} className="mr-2"/> พิมพ์รายงาน 2</button>
-          <button onClick={handleSave} disabled={saving} className="px-6 py-2 bg-indigo-600 text-white rounded-xl font-bold shadow-lg active:scale-95 transition-all ml-2">{saving ? '...' : 'บันทึก'}</button>
+          <button onClick={handleSave} disabled={saving || !selectedSupId} className={`px-6 py-2 rounded-xl font-bold shadow-lg transition-all ml-2 ${(!selectedSupId || saving) ? 'bg-slate-300 text-slate-500' : 'bg-indigo-600 text-white active:scale-95'}`}>{saving ? '...' : 'บันทึก'}</button>
         </div>
       </div>
 
       <div className="bg-white p-6 rounded-2xl border shadow-sm print:hidden">
-        <h3 className="font-bold text-slate-800 mb-4 flex items-center"><Plus size={18} className="mr-2 text-indigo-500"/> เลือกรายการเข้าบิล (ผสมได้ทั้งชุดอุปกรณ์และรายชิ้น)</h3>
-        <div className="flex flex-col gap-3">
-          <div className="flex flex-col md:flex-row gap-3">
-            <select 
-              value={lineType} 
-              onChange={e => { setLineType(e.target.value); setCurrentLineSelection(''); setSearchLineTerm(''); }} 
-              className="md:w-1/4 border rounded-xl p-3 outline-none focus:ring-2 focus:ring-indigo-500 bg-white font-bold text-indigo-700"
-            >
-              <option value="item">🏷️ เลือกจากสินค้ารายตัว</option>
-              <option value="set">📦 เลือกจากชุดอุปกรณ์</option>
-            </select>
-            <div className="relative flex-1">
-              <Search size={16} className="absolute left-3 top-3.5 text-slate-400"/>
-              <input 
-                type="text" 
-                placeholder={lineType === 'set' ? "ค้นหาชื่อชุดอุปกรณ์..." : "ค้นหารหัส หรือ ชื่อสินค้า..."} 
-                value={searchLineTerm} 
-                onChange={e => setSearchLineTerm(e.target.value)} 
-                className="w-full pl-10 pr-3 py-3 border rounded-xl text-sm outline-none focus:border-indigo-500 bg-slate-50"
-              />
-            </div>
-          </div>
-          <div className="flex flex-col md:flex-row gap-3">
-            <select value={currentLineSelection} onChange={e => setCurrentLineSelection(e.target.value)} className="flex-1 border rounded-xl p-3 outline-none focus:ring-2 focus:ring-indigo-500 bg-white">
-              <option value="">-- {lineType === 'set' ? 'คลิกเพื่อเลือกชุดอุปกรณ์' : 'คลิกเพื่อเลือกสินค้ารายตัว'} --</option>
-              {lineType === 'set' && filteredSets.map(s => (
-                <option key={`set-${s.id}`} value={`set|${s.id}`}>{s.name} ({formatCur(getSetPrice(s.id, poCurrency, effectiveRates), poCurrency)})</option>
-              ))}
-              {lineType === 'item' && filteredItems.map(i => {
-                 const itemCur = i.currency || 'THB';
-                 const netPriceOrig = (i.pricePerUnit || 0) * (1 - (i.discountPercent || 0) / 100);
-                 const convertedNet = convertPrice(netPriceOrig, itemCur, poCurrency, effectiveRates);
-                 return <option key={`item-${i.id}`} value={`item|${i.id}`}>[{i.code}] {i.itemName} ({formatCur(convertedNet, poCurrency)})</option>
-              })}
-            </select>
-            <div className="flex gap-2">
-              <input type="number" min="0.01" step="any" value={currentQty} onChange={e => setCurrentQty(e.target.value)} className="w-20 border rounded-xl p-3 outline-none text-center" title="จำนวน" placeholder="จำนวน"/>
-              <button onClick={handleAddLine} className="bg-slate-800 text-white px-6 py-3 rounded-xl font-bold transition-all active:scale-95 whitespace-nowrap">เพิ่มลงบิล</button>
-            </div>
-          </div>
+        <h3 className="font-bold text-slate-800 mb-4 flex items-center"><Plus size={18} className="mr-2 text-indigo-500"/> เลือกรายการเข้าบิล</h3>
+        
+        <div className="mb-6">
+          <select 
+            value={selectedSupId} 
+            onChange={e => { setSelectedSupId(e.target.value); setOrderLines([]); }} 
+            disabled={orderLines.length > 0}
+            className="w-full border rounded-xl p-3 outline-none focus:ring-2 focus:ring-indigo-500 bg-white font-bold text-slate-700 disabled:bg-slate-50 disabled:text-slate-400"
+          >
+            <option value="">-- กรุณาระบุซัพพลายเออร์สำหรับใบสั่งซื้อนี้ --</option>
+            {suppliers.map(s => <option key={s.id} value={s.id}>{s.brandName || s.companyName}</option>)}
+          </select>
+          {orderLines.length > 0 && <p className="text-xs text-amber-500 mt-2">* ลบรายการทั้งหมดในบิลออกก่อน หากต้องการเปลี่ยนซัพพลายเออร์</p>}
         </div>
+
+        {selectedSupId && (
+          <div className="flex flex-col gap-3 animate-in fade-in">
+            <div className="flex flex-col md:flex-row gap-3">
+              <select 
+                value={lineType} 
+                onChange={e => { setLineType(e.target.value); setCurrentLineSelection(''); setSearchLineTerm(''); }} 
+                className="md:w-1/4 border rounded-xl p-3 outline-none focus:ring-2 focus:ring-indigo-500 bg-white font-bold text-indigo-700"
+              >
+                <option value="item">🏷️ เลือกจากสินค้ารายตัว</option>
+                <option value="set">📦 เลือกจากชุดอุปกรณ์</option>
+              </select>
+              <div className="relative flex-1">
+                <Search size={16} className="absolute left-3 top-3.5 text-slate-400"/>
+                <input 
+                  type="text" 
+                  placeholder={lineType === 'set' ? "ค้นหาชื่อชุดอุปกรณ์..." : "ค้นหารหัส หรือ ชื่อสินค้า..."} 
+                  value={searchLineTerm} 
+                  onChange={e => setSearchLineTerm(e.target.value)} 
+                  className="w-full pl-10 pr-3 py-3 border rounded-xl text-sm outline-none focus:border-indigo-500 bg-slate-50"
+                />
+              </div>
+            </div>
+            <div className="flex flex-col md:flex-row gap-3">
+              <select value={currentLineSelection} onChange={e => setCurrentLineSelection(e.target.value)} className="flex-1 border rounded-xl p-3 outline-none focus:ring-2 focus:ring-indigo-500 bg-white">
+                <option value="">-- {lineType === 'set' ? 'คลิกเพื่อเลือกชุดอุปกรณ์' : 'คลิกเพื่อเลือกสินค้ารายตัว'} --</option>
+                {lineType === 'set' && filteredSets.map(s => (
+                  <option key={`set-${s.id}`} value={`set|${s.id}`}>{s.name} ({formatCur(getSetPrice(s.id, poCurrency, effectiveRates), poCurrency)})</option>
+                ))}
+                {lineType === 'item' && filteredItems.map(i => {
+                   const itemCur = i.currency || 'THB';
+                   const netPriceOrig = (i.pricePerUnit || 0) * (1 - (i.discountPercent || 0) / 100);
+                   const convertedNet = convertPrice(netPriceOrig, itemCur, poCurrency, effectiveRates);
+                   return <option key={`item-${i.id}`} value={`item|${i.id}`}>[{i.code}] {i.itemName} ({formatCur(convertedNet, poCurrency)})</option>
+                })}
+              </select>
+              <div className="flex gap-2">
+                <input type="number" min="0.01" step="any" value={currentQty} onChange={e => setCurrentQty(e.target.value)} className="w-20 border rounded-xl p-3 outline-none text-center" title="จำนวน" placeholder="จำนวน"/>
+                <button onClick={handleAddLine} className="bg-slate-800 text-white px-6 py-3 rounded-xl font-bold transition-all active:scale-95 whitespace-nowrap">เพิ่มลงบิล</button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
-      <div className="space-y-10 print:space-y-0">
-        {/* Report 1 */}
-        <div className={`bg-white border rounded-2xl overflow-hidden shadow-sm print:border-none print:shadow-none print:rounded-none ${printMode === 'report2' ? 'print:hidden' : ''}`}>
-          
-          <div className="hidden print:block mb-6 text-center border-b-2 border-slate-800 pb-4">
-            <h1 className="text-2xl font-bold text-slate-900 uppercase">ใบสั่งซื้อ (Purchase Order)</h1>
-            <div className="flex justify-between mt-4 text-sm font-bold text-slate-700">
-              <span>เลขที่อ้างอิง: {title}</span>
-              <span>วันที่พิมพ์: {new Date().toLocaleDateString('th-TH')}</span>
+      {selectedSupId && (
+        <div className="space-y-10 print:space-y-0">
+          {/* Report 1 */}
+          <div className={`bg-white border rounded-2xl overflow-hidden shadow-sm print:border-none print:shadow-none print:rounded-none ${printMode === 'report2' ? 'print:hidden' : ''}`}>
+            
+            <div className="hidden print:block mb-6 text-center border-b-2 border-slate-800 pb-4">
+              <h1 className="text-2xl font-bold text-slate-900 uppercase">ใบสั่งซื้อ (Purchase Order)</h1>
+              <div className="flex justify-between mt-4 text-sm font-bold text-slate-700">
+                <span>เลขที่อ้างอิง: {title}</span>
+                <span>วันที่พิมพ์: {new Date().toLocaleDateString('th-TH')}</span>
+              </div>
+            </div>
+
+            <div className="bg-slate-50 p-4 border-b flex justify-between items-center print:hidden">
+              <span className="font-bold text-slate-800">รายงาน 1: รายการในบิลสั่งซื้อ (ชุดอุปกรณ์ และ สินค้ารายตัว)</span>
+              <button onClick={exportReport1} className="text-xs flex items-center bg-white border border-slate-200 px-3 py-1.5 rounded-lg text-slate-600 hover:bg-slate-50 shadow-sm font-medium transition-colors">
+                <Download size={14} className="mr-1.5"/> Export CSV
+              </button>
+            </div>
+            <table className="w-full text-sm text-left print:border-collapse print:w-full">
+              <thead className="bg-slate-50 border-b text-[10px] font-bold text-slate-400 uppercase tracking-widest print-table-header print:bg-slate-100 print:text-slate-800 print:text-xs">
+                <tr><th className="p-4 print:border print:border-slate-300">ประเภท</th><th className="p-4 print:border print:border-slate-300">รายการ</th><th className="p-4 text-center print:border print:border-slate-300">จำนวน</th><th className="p-4 text-right print:border print:border-slate-300">ราคาหน่วย</th><th className="p-4 text-right print:border print:border-slate-300">ราคารวม</th><th className="p-4 print:hidden text-center">จัดการ</th></tr>
+              </thead>
+              <tbody className="divide-y text-[13px] print:divide-y-0">
+                {orderLines.map((line, i) => {
+                  let name = '';
+                  let price = 0;
+                  let isSet = line.type === 'set';
+                  
+                  if (isSet) {
+                    const s = equipmentSets.find(e => e.id === line.refId);
+                    name = s?.name || 'Unknown Set';
+                    price = getSetPrice(line.refId, poCurrency, effectiveRates);
+                  } else {
+                    const itm = items.find(e => e.id === line.refId);
+                    name = itm ? `[${itm.code}] ${itm.itemName}` : 'Unknown Item';
+                    const itemCur = itm?.currency || 'THB';
+                    const netOrig = (itm?.pricePerUnit || 0) * (1 - (itm?.discountPercent || 0)/100);
+                    price = convertPrice(netOrig, itemCur, poCurrency, effectiveRates);
+                  }
+
+                  return (
+                    <tr key={i} className="hover:bg-slate-50/50 print-avoid-break">
+                      <td className="p-4 print:border print:border-slate-300">
+                        <span className={`px-2 py-1 rounded text-[10px] font-bold ${isSet ? 'bg-indigo-100 text-indigo-700' : 'bg-emerald-100 text-emerald-700'} print:bg-transparent print:p-0 print:text-slate-800 print:text-xs`}>
+                          {isSet ? 'ชุดอุปกรณ์' : 'สินค้ารายชิ้น'}
+                        </span>
+                      </td>
+                      <td className="p-4 font-bold text-slate-700 print:border print:border-slate-300 print:text-xs">{name}</td>
+                      <td className="p-4 text-center print:border print:border-slate-300 print:p-2">
+                        <input 
+                          type="number" min="0.01" step="any" value={line.quantity} 
+                          onChange={(e) => {
+                            const newQty = e.target.value === '' ? '' : parseFloat(e.target.value);
+                            const newLines = [...orderLines];
+                            newLines[i].quantity = newQty || 0;
+                            setOrderLines(newLines);
+                          }}
+                          className="w-20 border border-slate-300 rounded-lg p-1.5 text-center text-sm outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 font-bold text-indigo-600 bg-white shadow-sm print:border-none print:shadow-none print:bg-transparent print:p-0 print:text-slate-900 print:w-auto"
+                          title="แก้ไขจำนวน"
+                        />
+                      </td>
+                      <td className="p-4 text-right font-mono print:border print:border-slate-300 print:text-xs">{formatCur(price, poCurrency)}</td>
+                      <td className="p-4 text-right font-bold text-slate-900 font-mono print:border print:border-slate-300 print:text-xs">{formatCur(price * line.quantity, poCurrency)}</td>
+                      <td className="p-4 text-center print:hidden"><button type="button" onClick={(e) => { e.preventDefault(); setOrderLines(orderLines.filter((_, idx) => idx !== i)); }} className="text-red-400 p-1 hover:bg-red-50 rounded transition-colors"><Trash2 size={14}/></button></td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+              <tfoot>
+                <tr className="bg-indigo-50/50 font-bold print:bg-slate-100 print-avoid-break">
+                  <td colSpan="4" className="p-4 text-right print:border print:border-slate-300">ยอดรวมทั้งสิ้น (Total)</td>
+                  <td className="p-4 text-right text-indigo-700 font-mono print:border print:border-slate-300 print:text-slate-900">
+                    {formatCur(orderLines.reduce((sum, line) => {
+                      let p = 0;
+                      if (line.type === 'set') p = getSetPrice(line.refId, poCurrency, effectiveRates);
+                      else {
+                        const itm = items.find(e => e.id === line.refId);
+                        const itemCur = itm?.currency || 'THB';
+                        const netOrig = (itm?.pricePerUnit || 0) * (1 - (itm?.discountPercent || 0)/100);
+                        p = convertPrice(netOrig, itemCur, poCurrency, effectiveRates);
+                      }
+                      return sum + (p * line.quantity);
+                    }, 0), poCurrency)}
+                  </td>
+                  <td className="print:hidden"></td>
+                </tr>
+              </tfoot>
+            </table>
+            
+            <div className="hidden print:flex justify-between mt-20 px-10">
+              <div className="text-center">
+                <div className="border-b border-slate-400 w-40 mx-auto mb-2"></div>
+                <div className="text-sm font-bold">ผู้จัดทำ (Prepared By)</div>
+                <div className="text-xs text-slate-500 mt-1">วันที่ (Date): ____/____/____</div>
+              </div>
+              <div className="text-center">
+                <div className="border-b border-slate-400 w-40 mx-auto mb-2"></div>
+                <div className="text-sm font-bold">ผู้อนุมัติ (Approved By)</div>
+                <div className="text-xs text-slate-500 mt-1">วันที่ (Date): ____/____/____</div>
+              </div>
             </div>
           </div>
 
-          <div className="bg-slate-50 p-4 border-b flex justify-between items-center print:hidden">
-            <span className="font-bold text-slate-800">รายงาน 1: รายการในบิลสั่งซื้อ (ชุดอุปกรณ์ และ สินค้ารายตัว)</span>
-            <button onClick={exportReport1} className="text-xs flex items-center bg-white border border-slate-200 px-3 py-1.5 rounded-lg text-slate-600 hover:bg-slate-50 shadow-sm font-medium transition-colors">
-              <Download size={14} className="mr-1.5"/> Export CSV
-            </button>
-          </div>
-          <table className="w-full text-sm text-left print:border-collapse print:w-full">
-            <thead className="bg-slate-50 border-b text-[10px] font-bold text-slate-400 uppercase tracking-widest print-table-header print:bg-slate-100 print:text-slate-800 print:text-xs">
-              <tr><th className="p-4 print:border print:border-slate-300">ประเภท</th><th className="p-4 print:border print:border-slate-300">รายการ</th><th className="p-4 text-center print:border print:border-slate-300">จำนวน</th><th className="p-4 text-right print:border print:border-slate-300">ราคาหน่วย</th><th className="p-4 text-right print:border print:border-slate-300">ราคารวม</th><th className="p-4 print:hidden text-center">จัดการ</th></tr>
-            </thead>
-            <tbody className="divide-y text-[13px] print:divide-y-0">
-              {orderLines.map((line, i) => {
-                let name = '';
-                let price = 0;
-                let isSet = line.type === 'set';
-                
-                if (isSet) {
-                  const s = equipmentSets.find(e => e.id === line.refId);
-                  name = s?.name || 'Unknown Set';
-                  price = getSetPrice(line.refId, poCurrency, effectiveRates);
-                } else {
-                  const itm = items.find(e => e.id === line.refId);
-                  name = itm ? `[${itm.code}] ${itm.itemName}` : 'Unknown Item';
-                  const itemCur = itm?.currency || 'THB';
-                  const netOrig = (itm?.pricePerUnit || 0) * (1 - (itm?.discountPercent || 0)/100);
-                  price = convertPrice(netOrig, itemCur, poCurrency, effectiveRates);
-                }
+          {/* Report 2 */}
+          <div className={`bg-white border rounded-2xl overflow-hidden shadow-sm print:border-none print:shadow-none print:rounded-none ${printMode === 'report1' ? 'print:hidden' : ''}`}>
+            
+            <div className="hidden print:block mb-6 text-center border-b-2 border-slate-800 pb-4 print:mt-0">
+              <h1 className="text-2xl font-bold text-slate-900 uppercase">สรุปรายการเบิกสินค้าย่อย (Item Summary)</h1>
+              <div className="flex justify-between mt-4 text-sm font-bold text-slate-700">
+                <span>อ้างอิงจากใบสั่งซื้อ: {title}</span>
+                <span>วันที่พิมพ์: {new Date().toLocaleDateString('th-TH')}</span>
+              </div>
+            </div>
 
-                return (
-                  <tr key={i} className="hover:bg-slate-50/50 print-avoid-break">
-                    <td className="p-4 print:border print:border-slate-300">
-                      <span className={`px-2 py-1 rounded text-[10px] font-bold ${isSet ? 'bg-indigo-100 text-indigo-700' : 'bg-emerald-100 text-emerald-700'} print:bg-transparent print:p-0 print:text-slate-800 print:text-xs`}>
-                        {isSet ? 'ชุดอุปกรณ์' : 'สินค้ารายชิ้น'}
-                      </span>
-                    </td>
-                    <td className="p-4 font-bold text-slate-700 print:border print:border-slate-300 print:text-xs">{name}</td>
-                    <td className="p-4 text-center print:border print:border-slate-300 print:p-2">
-                      <input 
-                        type="number" min="0.01" step="any" value={line.quantity} 
-                        onChange={(e) => {
-                          const newQty = e.target.value === '' ? '' : parseFloat(e.target.value);
-                          const newLines = [...orderLines];
-                          newLines[i].quantity = newQty || 0;
-                          setOrderLines(newLines);
-                        }}
-                        className="w-20 border border-slate-300 rounded-lg p-1.5 text-center text-sm outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 font-bold text-indigo-600 bg-white shadow-sm print:border-none print:shadow-none print:bg-transparent print:p-0 print:text-slate-900 print:w-auto"
-                        title="แก้ไขจำนวน"
-                      />
-                    </td>
-                    <td className="p-4 text-right font-mono print:border print:border-slate-300 print:text-xs">{formatCur(price, poCurrency)}</td>
-                    <td className="p-4 text-right font-bold text-slate-900 font-mono print:border print:border-slate-300 print:text-xs">{formatCur(price * line.quantity, poCurrency)}</td>
-                    <td className="p-4 text-center print:hidden"><button type="button" onClick={(e) => { e.preventDefault(); setOrderLines(orderLines.filter((_, idx) => idx !== i)); }} className="text-red-400 p-1 hover:bg-red-50 rounded transition-colors"><Trash2 size={14}/></button></td>
-                  </tr>
-                )
-              })}
-            </tbody>
-            <tfoot>
-              <tr className="bg-indigo-50/50 font-bold print:bg-slate-100 print-avoid-break">
-                <td colSpan="4" className="p-4 text-right print:border print:border-slate-300">ยอดรวมทั้งสิ้น (Total)</td>
-                <td className="p-4 text-right text-indigo-700 font-mono print:border print:border-slate-300 print:text-slate-900">
-                  {formatCur(orderLines.reduce((sum, line) => {
-                    let p = 0;
-                    if (line.type === 'set') p = getSetPrice(line.refId, poCurrency, effectiveRates);
-                    else {
-                      const itm = items.find(e => e.id === line.refId);
-                      const itemCur = itm?.currency || 'THB';
-                      const netOrig = (itm?.pricePerUnit || 0) * (1 - (itm?.discountPercent || 0)/100);
-                      p = convertPrice(netOrig, itemCur, poCurrency, effectiveRates);
-                    }
-                    return sum + (p * line.quantity);
-                  }, 0), poCurrency)}
-                </td>
-                <td className="print:hidden"></td>
-              </tr>
-            </tfoot>
-          </table>
-          
-          <div className="hidden print:flex justify-between mt-20 px-10">
-            <div className="text-center">
-              <div className="border-b border-slate-400 w-40 mx-auto mb-2"></div>
-              <div className="text-sm font-bold">ผู้จัดทำ (Prepared By)</div>
-              <div className="text-xs text-slate-500 mt-1">วันที่ (Date): ____/____/____</div>
+            <div className="bg-slate-50 p-4 border-b flex justify-between items-center print:hidden">
+              <span className="font-bold text-slate-800">รายงาน 2: สรุปรายการสินค้าย่อยทั้งหมด</span>
+              <button onClick={exportReport2} className="text-xs flex items-center bg-white border border-slate-200 px-3 py-1.5 rounded-lg text-slate-600 hover:bg-slate-50 shadow-sm font-medium transition-colors">
+                <Download size={14} className="mr-1.5"/> Export CSV
+              </button>
             </div>
-            <div className="text-center">
-              <div className="border-b border-slate-400 w-40 mx-auto mb-2"></div>
-              <div className="text-sm font-bold">ผู้อนุมัติ (Approved By)</div>
-              <div className="text-xs text-slate-500 mt-1">วันที่ (Date): ____/____/____</div>
-            </div>
+            <table className="w-full text-sm text-left print:border-collapse print:w-full">
+              <thead className="bg-slate-50 border-b text-[10px] font-bold text-slate-400 uppercase tracking-widest print-table-header print:bg-slate-100 print:text-slate-800 print:text-xs">
+                <tr>
+                  <th className="p-4 print:border print:border-slate-300">ซัพพลายเออร์</th>
+                  <th className="p-4 print:border print:border-slate-300">ชื่อสินค้า</th>
+                  <th className="p-4 text-right font-mono print:border print:border-slate-300">ราคา (สุทธิ)</th>
+                  <th className="p-4 text-center print:border print:border-slate-300">MOQ (เงื่อนไข)</th>
+                  <th className="p-4 text-center print:border print:border-slate-300">รวมจำนวน</th>
+                  <th className="p-4 text-right font-mono print:border print:border-slate-300">ราคารวม</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y text-[13px] print:divide-y-0">
+                {report2Rows.map((r, i) => {
+                  const isMoqFailed = r.missingQty > 0;
+                  const moqWarningTitle = r.moqType === 'multiple' ? `ต้องสั่งทีละ ${r.moq} ${r.unit}` : `ต้องสั่งขั้นต่ำ ${r.moq} ${r.unit}`;
+                  const moqDisplay = r.moqType === 'multiple' ? `ทุกๆ ${r.moq}` : `ขั้นต่ำ ${r.moq}`;
+
+                  return (
+                    <tr key={i} className={`${isMoqFailed ? 'bg-red-50/50' : 'hover:bg-slate-50/50'} print-avoid-break print:bg-transparent`}>
+                      <td className="p-4 print:border print:border-slate-300 print:text-xs"><span className="bg-slate-100 text-slate-600 px-2 py-1 rounded text-[10px] font-bold print:bg-transparent print:p-0 print:text-slate-900 print:text-xs">{r.supplierName}</span></td>
+                      <td className="p-4 print:border print:border-slate-300 print:text-xs">
+                        <div className="font-bold flex items-center">
+                          {r.itemName}
+                          {isMoqFailed && <AlertTriangle size={14} className="text-red-500 ml-2 print:hidden" title={moqWarningTitle} />}
+                        </div>
+                        <div className="text-[11px] text-slate-400 mt-0.5 print:text-slate-600">{r.code} | {r.category}</div>
+                      </td>
+                      <td className="p-4 text-right font-mono text-slate-500 print:border print:border-slate-300 print:text-slate-900 print:text-xs">
+                        {r.discountPercent > 0 && <div className="text-[10px] text-red-400 line-through print:hidden">{formatCur(r.fullPrice, poCurrency)}</div>}
+                        <div className="text-slate-700 print:text-slate-900">{formatCur(r.netPrice, poCurrency)}</div>
+                      </td>
+                      <td className="p-4 text-center print:border print:border-slate-300 print:text-xs">
+                        {r.moq > 0 ? <span className="bg-amber-100 text-amber-700 px-2 py-1 rounded text-[11px] font-bold whitespace-nowrap print:bg-transparent print:text-slate-900 print:p-0">{moqDisplay}</span> : <span className="text-slate-300 print:text-slate-600">-</span>}
+                      </td>
+                      <td className="p-4 text-center print:border print:border-slate-300 print:text-xs">
+                        <div className={`font-bold ${isMoqFailed ? 'text-red-600' : 'text-indigo-600'} print:text-slate-900`}>{r.qty} {r.unit}</div>
+                        {isMoqFailed && (
+                          <button onClick={() => adjustMOQ(r.id, r.missingQty)} className="mt-2 text-[10px] font-bold bg-green-100 text-green-700 px-2 py-1 rounded flex items-center justify-center mx-auto hover:bg-green-200 transition-colors print:hidden shadow-sm">
+                            <ArrowUpCircle size={12} className="mr-1"/> ปรับยอดอัตโนมัติ (+{r.missingQty})
+                          </button>
+                        )}
+                      </td>
+                      <td className="p-4 text-right font-bold text-slate-900 font-mono print:border print:border-slate-300 print:text-xs">{formatCur(r.total, poCurrency)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+              <tfoot>
+                <tr className="bg-indigo-50/50 font-bold print:bg-slate-100 print-avoid-break"><td colSpan="5" className="p-4 text-right print:border print:border-slate-300">ยอดรวมทั้งสิ้น (Total)</td><td className="p-4 text-right text-indigo-700 font-mono print:border print:border-slate-300 print:text-slate-900">{formatCur(report2Rows.reduce((sum, r) => sum + r.total, 0), poCurrency)}</td></tr>
+              </tfoot>
+            </table>
           </div>
         </div>
-
-        {/* Report 2 */}
-        <div className={`bg-white border rounded-2xl overflow-hidden shadow-sm print:border-none print:shadow-none print:rounded-none ${printMode === 'report1' ? 'print:hidden' : ''}`}>
-          
-          <div className="hidden print:block mb-6 text-center border-b-2 border-slate-800 pb-4 print:mt-0">
-            <h1 className="text-2xl font-bold text-slate-900 uppercase">สรุปรายการเบิกสินค้าย่อย (Item Summary)</h1>
-            <div className="flex justify-between mt-4 text-sm font-bold text-slate-700">
-              <span>อ้างอิงจากใบสั่งซื้อ: {title}</span>
-              <span>วันที่พิมพ์: {new Date().toLocaleDateString('th-TH')}</span>
-            </div>
-          </div>
-
-          <div className="bg-slate-50 p-4 border-b flex justify-between items-center print:hidden">
-            <span className="font-bold text-slate-800">รายงาน 2: สรุปรายการสินค้าย่อยทั้งหมด</span>
-            <button onClick={exportReport2} className="text-xs flex items-center bg-white border border-slate-200 px-3 py-1.5 rounded-lg text-slate-600 hover:bg-slate-50 shadow-sm font-medium transition-colors">
-              <Download size={14} className="mr-1.5"/> Export CSV
-            </button>
-          </div>
-          <table className="w-full text-sm text-left print:border-collapse print:w-full">
-            <thead className="bg-slate-50 border-b text-[10px] font-bold text-slate-400 uppercase tracking-widest print-table-header print:bg-slate-100 print:text-slate-800 print:text-xs">
-              <tr>
-                <th className="p-4 print:border print:border-slate-300">ซัพพลายเออร์</th>
-                <th className="p-4 print:border print:border-slate-300">ชื่อสินค้า</th>
-                <th className="p-4 text-right font-mono print:border print:border-slate-300">ราคา (สุทธิ)</th>
-                <th className="p-4 text-center print:border print:border-slate-300">MOQ (เงื่อนไข)</th>
-                <th className="p-4 text-center print:border print:border-slate-300">รวมจำนวน</th>
-                <th className="p-4 text-right font-mono print:border print:border-slate-300">ราคารวม</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y text-[13px] print:divide-y-0">
-              {report2Rows.map((r, i) => {
-                const isMoqFailed = r.missingQty > 0;
-                const moqWarningTitle = r.moqType === 'multiple' ? `ต้องสั่งทีละ ${r.moq} ${r.unit}` : `ต้องสั่งขั้นต่ำ ${r.moq} ${r.unit}`;
-                const moqDisplay = r.moqType === 'multiple' ? `ทุกๆ ${r.moq}` : `ขั้นต่ำ ${r.moq}`;
-
-                return (
-                  <tr key={i} className={`${isMoqFailed ? 'bg-red-50/50' : 'hover:bg-slate-50/50'} print-avoid-break print:bg-transparent`}>
-                    <td className="p-4 print:border print:border-slate-300 print:text-xs"><span className="bg-slate-100 text-slate-600 px-2 py-1 rounded text-[10px] font-bold print:bg-transparent print:p-0 print:text-slate-900 print:text-xs">{r.supplierName}</span></td>
-                    <td className="p-4 print:border print:border-slate-300 print:text-xs">
-                      <div className="font-bold flex items-center">
-                        {r.itemName}
-                        {isMoqFailed && <AlertTriangle size={14} className="text-red-500 ml-2 print:hidden" title={moqWarningTitle} />}
-                      </div>
-                      <div className="text-[11px] text-slate-400 mt-0.5 print:text-slate-600">{r.code} | {r.category}</div>
-                    </td>
-                    <td className="p-4 text-right font-mono text-slate-500 print:border print:border-slate-300 print:text-slate-900 print:text-xs">
-                      {r.discountPercent > 0 && <div className="text-[10px] text-red-400 line-through print:hidden">{formatCur(r.fullPrice, poCurrency)}</div>}
-                      <div className="text-slate-700 print:text-slate-900">{formatCur(r.netPrice, poCurrency)}</div>
-                    </td>
-                    <td className="p-4 text-center print:border print:border-slate-300 print:text-xs">
-                      {r.moq > 0 ? <span className="bg-amber-100 text-amber-700 px-2 py-1 rounded text-[11px] font-bold whitespace-nowrap print:bg-transparent print:text-slate-900 print:p-0">{moqDisplay}</span> : <span className="text-slate-300 print:text-slate-600">-</span>}
-                    </td>
-                    <td className="p-4 text-center print:border print:border-slate-300 print:text-xs">
-                      <div className={`font-bold ${isMoqFailed ? 'text-red-600' : 'text-indigo-600'} print:text-slate-900`}>{r.qty} {r.unit}</div>
-                      {isMoqFailed && (
-                        <button onClick={() => adjustMOQ(r.id, r.missingQty)} className="mt-2 text-[10px] font-bold bg-green-100 text-green-700 px-2 py-1 rounded flex items-center justify-center mx-auto hover:bg-green-200 transition-colors print:hidden shadow-sm">
-                          <ArrowUpCircle size={12} className="mr-1"/> ปรับยอดอัตโนมัติ (+{r.missingQty})
-                        </button>
-                      )}
-                    </td>
-                    <td className="p-4 text-right font-bold text-slate-900 font-mono print:border print:border-slate-300 print:text-xs">{formatCur(r.total, poCurrency)}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-            <tfoot>
-              <tr className="bg-indigo-50/50 font-bold print:bg-slate-100 print-avoid-break"><td colSpan="5" className="p-4 text-right print:border print:border-slate-300">ยอดรวมทั้งสิ้น (Total)</td><td className="p-4 text-right text-indigo-700 font-mono print:border print:border-slate-300 print:text-slate-900">{formatCur(report2Rows.reduce((sum, r) => sum + r.total, 0), poCurrency)}</td></tr>
-            </tfoot>
-          </table>
-        </div>
-      </div>
+      )}
     </div>
   );
 }
