@@ -10,7 +10,7 @@ import {
   getAuth, signInAnonymously, onAuthStateChanged 
 } from 'firebase/auth';
 import { 
-  getFirestore, collection, doc, setDoc, onSnapshot, deleteDoc, serverTimestamp, getDoc
+  getFirestore, collection, doc, setDoc, onSnapshot, deleteDoc, serverTimestamp, getDoc, getDocs
 } from 'firebase/firestore';
 
 // --- Firebase Configuration ---
@@ -289,6 +289,29 @@ export default function App() {
     }, 0);
   };
 
+  const recoverOldData = async () => {
+    if (!firebaseUser) return;
+    showConfirm('ดึงข้อมูลระบบเก่า', 'ระบบจะทำการกวาดข้อมูลเดิมทั้งหมด (สินค้า, ซัพพลายเออร์, ใบสั่งซื้อ) ที่บันทึกไว้ในสิทธิ์ส่วนตัว กลับมาใส่ในระบบแชร์ส่วนกลาง คุณต้องการดำเนินการหรือไม่?', async () => {
+      try {
+        const oldBasePath = `users/${firebaseUser.uid}`;
+        const collectionsToMigrate = ['suppliers', 'items', 'equipmentSets', 'purchaseOrders'];
+        let totalMigrated = 0;
+
+        for (const col of collectionsToMigrate) {
+          const snapshot = await getDocs(collection(db, `${oldBasePath}/${col}`));
+          for (const docSnap of snapshot.docs) {
+            await setDoc(doc(db, `${BASE_PATH}/${col}`, docSnap.id), docSnap.data(), { merge: true });
+            totalMigrated++;
+          }
+        }
+        
+        showAlert("สำเร็จ!", `กู้คืนและโอนย้ายข้อมูลเดิมสำเร็จจำนวน ${totalMigrated} รายการครับ`);
+      } catch (err) {
+        showAlert("ข้อผิดพลาด", "ไม่สามารถดึงข้อมูลได้: " + err.message);
+      }
+    });
+  };
+
   const seedDatabase = async () => {
     if (!firebaseUser) return;
     try {
@@ -376,9 +399,14 @@ export default function App() {
           
           <div className="p-4 mt-auto border-t border-slate-100 space-y-3">
             {isAdmin && (
-              <button onClick={seedDatabase} className="w-full py-2.5 px-4 bg-slate-50 text-slate-600 rounded-xl text-xs font-bold hover:bg-slate-100 transition-all border border-slate-200">
-                + สร้างข้อมูลตัวอย่าง (Demo)
-              </button>
+              <>
+                <button onClick={recoverOldData} className="w-full py-2.5 px-4 bg-amber-50 text-amber-700 rounded-xl text-xs font-bold hover:bg-amber-100 transition-all border border-amber-200 flex items-center justify-center shadow-sm">
+                  <Database size={14} className="mr-2" /> ดึงข้อมูลระบบเก่ากลับมา
+                </button>
+                <button onClick={seedDatabase} className="w-full py-2.5 px-4 bg-slate-50 text-slate-600 rounded-xl text-xs font-bold hover:bg-slate-100 transition-all border border-slate-200">
+                  + สร้างข้อมูลตัวอย่าง (Demo)
+                </button>
+              </>
             )}
             <button onClick={handleLogout} className="w-full py-3 px-4 bg-white border border-red-200 text-red-600 rounded-xl text-xs font-bold hover:bg-red-50 hover:border-red-300 transition-all flex items-center justify-center shadow-sm">
               <LogOut size={16} className="mr-2" /> ออกจากระบบ
