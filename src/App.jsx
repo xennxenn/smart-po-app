@@ -2,7 +2,8 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { 
   ShoppingCart, Package, Users, Database, Plus, Trash2, 
   Save, FileText, ArrowLeft, Check, AlertCircle, Edit, List,
-  Printer, Upload, Search, X, AlertTriangle, ArrowUpCircle, Download, Globe
+  Printer, Upload, Search, X, AlertTriangle, ArrowUpCircle, Download, Globe,
+  Lock, LogIn, UserPlus, LogOut, Shield, UserCircle, BadgeCheck
 } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { 
@@ -26,6 +27,10 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
+
+// ใช้ Scope ของแอปเพื่อให้พนักงานทุกคนเห็นฐานข้อมูลชุดเดียวกัน
+const APP_ID = typeof __app_id !== 'undefined' ? __app_id : 'smart-po-company';
+const BASE_PATH = `artifacts/${APP_ID}/public/data`;
 
 // --- Currency & Exchange Rate Helpers ---
 const DEFAULT_RATES = { THB: 1, USD: 0.028, EUR: 0.025, JPY: 4.2, CNY: 0.2, GBP: 0.022, SGD: 0.038 };
@@ -100,12 +105,97 @@ function CustomModal({ isOpen, type, title, message, onConfirm, onCancel }) {
   );
 }
 
+// --- App Custom Login Screen Component ---
+function AppLoginScreen({ employees, onLogin }) {
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+
+  const handleLogin = (e) => {
+    e.preventDefault();
+    setError('');
+    
+    // ค้นหาพนักงานจากฐานข้อมูลที่โหลดมา
+    const foundUser = employees.find(emp => 
+      emp.username.toLowerCase() === username.trim().toLowerCase() && 
+      emp.password === password
+    );
+
+    if (foundUser) {
+      onLogin(foundUser);
+    } else {
+      setError('รหัสพนักงาน หรือ รหัสผ่านไม่ถูกต้อง');
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4 font-sans">
+      <div className="bg-white max-w-md w-full rounded-3xl shadow-xl overflow-hidden border border-slate-100">
+        <div className="bg-indigo-600 p-8 text-center">
+          <div className="bg-white/20 p-4 rounded-2xl inline-block mb-4 backdrop-blur-sm">
+            <Shield size={32} className="text-white" />
+          </div>
+          <h2 className="text-2xl font-bold text-white tracking-tight">Smart PO Manager</h2>
+          <p className="text-indigo-100 mt-2 text-sm">เข้าสู่ระบบด้วยรหัสพนักงาน</p>
+        </div>
+        
+        <div className="p-8">
+          <h3 className="text-xl font-bold text-slate-800 mb-6 text-center">เข้าสู่ระบบ (Sign In)</h3>
+
+          {error && (
+            <div className="bg-red-50 text-red-600 p-4 rounded-xl text-sm font-medium mb-6 flex items-start border border-red-100">
+              <AlertCircle size={18} className="mr-2 flex-shrink-0 mt-0.5" />
+              <span>{error}</span>
+            </div>
+          )}
+
+          <form onSubmit={handleLogin} className="space-y-5">
+            <div>
+              <label className="block text-sm font-bold text-slate-700 mb-2">รหัสพนักงาน / Username</label>
+              <div className="relative">
+                <UserCircle size={18} className="absolute left-4 top-3.5 text-slate-400" />
+                <input 
+                  type="text" required
+                  value={username} onChange={e => setUsername(e.target.value)}
+                  className="w-full pl-11 pr-4 py-3 border border-slate-200 rounded-xl outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition-all bg-slate-50 focus:bg-white font-bold text-slate-700"
+                  placeholder="กรอกรหัสพนักงาน"
+                />
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-bold text-slate-700 mb-2">รหัสผ่าน (Password)</label>
+              <div className="relative">
+                <Lock size={18} className="absolute left-4 top-3.5 text-slate-400" />
+                <input 
+                  type="password" required
+                  value={password} onChange={e => setPassword(e.target.value)}
+                  className="w-full pl-11 pr-4 py-3 border border-slate-200 rounded-xl outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition-all bg-slate-50 focus:bg-white font-bold text-slate-700"
+                  placeholder="กรอกรหัสผ่าน"
+                />
+              </div>
+            </div>
+
+            <button 
+              type="submit" 
+              className="w-full bg-indigo-600 text-white py-3.5 rounded-xl font-bold hover:bg-indigo-700 transition-all active:scale-95 shadow-lg shadow-indigo-100 flex justify-center items-center mt-8"
+            >
+              <LogIn size={18} className="mr-2"/> เข้าสู่ระบบ
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
-  const [user, setUser] = useState(null);
+  const [firebaseUser, setFirebaseUser] = useState(null);
+  const [loggedInEmployee, setLoggedInEmployee] = useState(null);
   const [loadingAuth, setLoadingAuth] = useState(true);
   const [exchangeRates, setExchangeRates] = useState(DEFAULT_RATES);
 
   // App Data State
+  const [employees, setEmployees] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
   const [items, setItems] = useState([]);
   const [equipmentSets, setEquipmentSets] = useState([]);
@@ -138,28 +228,53 @@ export default function App() {
       .catch(err => console.error('Fetch rates error, using defaults', err));
   }, []);
 
+  // Firebase Anonymous Auth (เพื่อผ่าน Security Rules)
   useEffect(() => {
     const initAuth = async () => {
-      try { await signInAnonymously(auth); } 
-      catch (error) { console.error("Auth error:", error); setLoadingAuth(false); }
+      try { 
+        await signInAnonymously(auth); 
+      } catch (error) { 
+        console.error("Firebase Auth error:", error); 
+        setLoadingAuth(false); 
+      }
     };
     initAuth();
-    const unsubscribe = onAuthStateChanged(auth, (u) => { setUser(u); setLoadingAuth(false); });
+    
+    const unsubscribe = onAuthStateChanged(auth, (u) => { 
+      setFirebaseUser(u); 
+    });
     return () => unsubscribe();
   }, []);
 
+  // โหลดข้อมูลทั้งหมดจาก Public Shared Path
   useEffect(() => {
-    if (!user) return;
-    const basePath = `users/${user.uid}`;
-    const unsubSuppliers = onSnapshot(collection(db, `${basePath}/suppliers`), (snap) => setSuppliers(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
-    const unsubItems = onSnapshot(collection(db, `${basePath}/items`), (snap) => setItems(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
-    const unsubSets = onSnapshot(collection(db, `${basePath}/equipmentSets`), (snap) => setEquipmentSets(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
-    const unsubPOs = onSnapshot(collection(db, `${basePath}/purchaseOrders`), (snap) => setPurchaseOrders(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+    if (!firebaseUser) return;
+    
+    const unsubEmployees = onSnapshot(collection(db, `${BASE_PATH}/employees`), (snap) => {
+      const emps = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      setEmployees(emps);
+      
+      // Auto Create Admin User if no users exist
+      if (emps.length === 0) {
+        setDoc(doc(db, `${BASE_PATH}/employees`, 'admin'), {
+          username: 'Admin',
+          name: 'Administrator',
+          password: '1234',
+          role: 'admin',
+          createdAt: serverTimestamp()
+        });
+      }
+      setLoadingAuth(false); // พร้อมให้หน้า Login ทำงาน
+    });
 
-    return () => { unsubSuppliers(); unsubItems(); unsubSets(); unsubPOs(); };
-  }, [user]);
+    const unsubSuppliers = onSnapshot(collection(db, `${BASE_PATH}/suppliers`), (snap) => setSuppliers(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+    const unsubItems = onSnapshot(collection(db, `${BASE_PATH}/items`), (snap) => setItems(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+    const unsubSets = onSnapshot(collection(db, `${BASE_PATH}/equipmentSets`), (snap) => setEquipmentSets(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+    const unsubPOs = onSnapshot(collection(db, `${BASE_PATH}/purchaseOrders`), (snap) => setPurchaseOrders(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
 
-  // ฟังก์ชันคำนวณราคาชุดอุปกรณ์แบบอิงสกุลเงินปลายทาง
+    return () => { unsubEmployees(); unsubSuppliers(); unsubItems(); unsubSets(); unsubPOs(); };
+  }, [firebaseUser]);
+
   const getSetPrice = (setId, targetCur = 'THB', ratesObj = exchangeRates) => {
     const eqSet = equipmentSets.find(s => s.id === setId);
     if (!eqSet) return 0;
@@ -175,73 +290,109 @@ export default function App() {
   };
 
   const seedDatabase = async () => {
-    if (!user) return;
-    const basePath = `users/${user.uid}`;
+    if (!firebaseUser) return;
     try {
       const s1Id = 'SUP001';
-      await setDoc(doc(db, `${basePath}/suppliers`, s1Id), { brandName: 'IT Solutions', companyName: 'IT Solutions Co.,Ltd.', address: 'Bangkok', branch: 'HQ', taxId: '1234567890123' });
+      await setDoc(doc(db, `${BASE_PATH}/suppliers`, s1Id), { brandName: 'IT Solutions', companyName: 'IT Solutions Co.,Ltd.', address: 'Bangkok', branch: 'HQ', taxId: '1234567890123' });
       const i1Id = 'ITM001';
-      await setDoc(doc(db, `${basePath}/items`, i1Id), { supplierId: s1Id, code: '885001', category: 'IT', itemName: 'Wireless Mouse (เมาส์ไร้สาย)', pricePerUnit: 20, currency: 'USD', unit: 'อัน', discountPercent: 0, moq: 5, moqType: 'minimum' });
+      await setDoc(doc(db, `${BASE_PATH}/items`, i1Id), { supplierId: s1Id, code: '885001', category: 'IT', itemName: 'Wireless Mouse (เมาส์ไร้สาย)', pricePerUnit: 20, currency: 'USD', unit: 'อัน', discountPercent: 0, moq: 5, moqType: 'minimum' });
       const i2Id = 'ITM002';
-      await setDoc(doc(db, `${basePath}/items`, i2Id), { supplierId: s1Id, code: '885002', category: 'IT', itemName: 'Keyboard (Premium)', pricePerUnit: 990, currency: 'THB', unit: 'อัน', discountPercent: 5, moq: 2, moqType: 'multiple' });
+      await setDoc(doc(db, `${BASE_PATH}/items`, i2Id), { supplierId: s1Id, code: '885002', category: 'IT', itemName: 'Keyboard (Premium)', pricePerUnit: 990, currency: 'THB', unit: 'อัน', discountPercent: 5, moq: 2, moqType: 'multiple' });
       const set1Id = 'SET001';
-      await setDoc(doc(db, `${basePath}/equipmentSets`, set1Id), { supplierId: s1Id, name: 'ชุดเริ่มต้น IT', currency: 'THB', items: [{ itemId: i1Id, quantity: 1 }] });
+      await setDoc(doc(db, `${BASE_PATH}/equipmentSets`, set1Id), { supplierId: s1Id, name: 'ชุดเริ่มต้น IT', currency: 'THB', items: [{ itemId: i1Id, quantity: 1 }] });
       showAlert("สำเร็จ", "สร้างข้อมูลตัวอย่างสำเร็จ!");
     } catch (e) {
-      showAlert("เกิดข้อผิดพลาด", "โปรดเช็ค Firestore Rules");
+      showAlert("เกิดข้อผิดพลาด", "โปรดเช็คสิทธิ์ Firestore");
     }
+  };
+
+  const handleLogout = () => {
+    showConfirm("ออกจากระบบ", "คุณต้องการออกจากระบบใช่หรือไม่?", () => {
+      setLoggedInEmployee(null);
+    });
   };
 
   if (loadingAuth) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50">
         <div className="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mb-4"></div>
-        <p className="text-slate-600 font-medium">กำลังเชื่อมต่อฐานข้อมูล Cloud...</p>
+        <p className="text-slate-600 font-medium">กำลังโหลดระบบและเชื่อมต่อฐานข้อมูล...</p>
       </div>
     );
   }
 
-  if (!user) {
+  if (!firebaseUser) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 p-6 text-center">
         <AlertCircle size={48} className="text-red-500 mb-4" />
-        <h2 className="text-xl font-bold text-slate-800 mb-2">ไม่สามารถเข้าสู่ระบบได้</h2>
-        <p className="text-slate-600 max-w-md">โปรดเปิดใช้งาน 'Anonymous Login' ใน Firebase Console</p>
+        <h2 className="text-xl font-bold text-slate-800 mb-2">ไม่สามารถเชื่อมต่อ Cloud ได้</h2>
+        <p className="text-slate-600 max-w-md">โปรดตรวจสอบการตั้งค่า Firebase Authentication</p>
       </div>
     );
   }
+
+  // แสดงหน้า Login ของพนักงาน
+  if (!loggedInEmployee) {
+    return <AppLoginScreen employees={employees} onLogin={setLoggedInEmployee} />;
+  }
+
+  const isAdmin = loggedInEmployee.role === 'admin';
 
   return (
     <>
       <div className="min-h-screen bg-slate-50 flex flex-col md:flex-row font-sans print:bg-white text-slate-900">
-        <aside className="w-full md:w-64 bg-white border-r border-slate-200 flex-shrink-0 shadow-sm print:hidden">
+        <aside className="w-full md:w-64 bg-white border-r border-slate-200 flex-shrink-0 shadow-sm print:hidden flex flex-col h-screen overflow-y-auto">
           <div className="p-6 border-b border-slate-100 flex items-center space-x-3">
             <div className="bg-indigo-600 p-2 rounded-lg text-white shadow-lg shadow-indigo-200">
               <ShoppingCart size={24} />
             </div>
             <h1 className="text-xl font-bold text-slate-800 tracking-tight">PO Manager</h1>
           </div>
+          
+          <div className="p-4 border-b border-slate-100 bg-indigo-50/50 flex items-center justify-between">
+            <div className="flex flex-col">
+              <div className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest mb-1 flex items-center">
+                {isAdmin ? <Shield size={12} className="mr-1"/> : <UserCircle size={12} className="mr-1"/>}
+                {isAdmin ? 'Administrator' : 'Employee'}
+              </div>
+              <div className="text-sm font-bold text-indigo-900 truncate">{loggedInEmployee.name}</div>
+            </div>
+          </div>
+
           <nav className="p-4 space-y-1">
             <SidebarButton icon={FileText} label="ใบสั่งซื้อ (POs)" active={activeTab === 'pos' || activeTab === 'po-editor'} onClick={() => setActiveTab('pos')} />
             <div className="pt-6 pb-2 px-3 text-[10px] font-bold text-slate-400 uppercase tracking-widest">ข้อมูลพื้นฐาน</div>
             <SidebarButton icon={Package} label="ชุดอุปกรณ์" active={activeTab === 'sets'} onClick={() => setActiveTab('sets')} />
             <SidebarButton icon={Database} label="รายการสินค้า" active={activeTab === 'items'} onClick={() => setActiveTab('items')} />
             <SidebarButton icon={Users} label="ซัพพลายเออร์" active={activeTab === 'suppliers'} onClick={() => setActiveTab('suppliers')} />
+            
+            {isAdmin && (
+              <>
+                <div className="pt-6 pb-2 px-3 text-[10px] font-bold text-emerald-500 uppercase tracking-widest">ระบบผู้ดูแล (Admin)</div>
+                <SidebarButton icon={UserPlus} label="จัดการพนักงาน" active={activeTab === 'employees'} onClick={() => setActiveTab('employees')} customClass="hover:bg-emerald-50 hover:text-emerald-700 data-[active=true]:bg-emerald-600" />
+              </>
+            )}
           </nav>
-          <div className="p-4 mt-auto border-t border-slate-100">
-            <button onClick={seedDatabase} className="w-full py-2.5 px-4 bg-indigo-50 text-indigo-700 rounded-xl text-xs font-bold hover:bg-indigo-100 transition-all">
-              + สร้างข้อมูลตัวอย่าง
+          
+          <div className="p-4 mt-auto border-t border-slate-100 space-y-3">
+            {isAdmin && (
+              <button onClick={seedDatabase} className="w-full py-2.5 px-4 bg-slate-50 text-slate-600 rounded-xl text-xs font-bold hover:bg-slate-100 transition-all border border-slate-200">
+                + สร้างข้อมูลตัวอย่าง (Demo)
+              </button>
+            )}
+            <button onClick={handleLogout} className="w-full py-3 px-4 bg-white border border-red-200 text-red-600 rounded-xl text-xs font-bold hover:bg-red-50 hover:border-red-300 transition-all flex items-center justify-center shadow-sm">
+              <LogOut size={16} className="mr-2" /> ออกจากระบบ
             </button>
           </div>
         </aside>
 
-        <main className="flex-1 overflow-auto print:overflow-visible">
+        <main className="flex-1 overflow-auto print:overflow-visible h-screen relative">
           {activeTab === 'pos' && (
             <POList 
               purchaseOrders={purchaseOrders} 
               onCreateNew={() => { setEditingPoId(null); setActiveTab('po-editor'); }}
               onEdit={(id) => { setEditingPoId(id); setActiveTab('po-editor'); }}
-              db={db} basePath={`users/${user.uid}`} showConfirm={showConfirm} suppliers={suppliers}
+              db={db} basePath={BASE_PATH} showConfirm={showConfirm} suppliers={suppliers}
             />
           )}
           {activeTab === 'po-editor' && (
@@ -249,13 +400,15 @@ export default function App() {
               poId={editingPoId}
               onBack={() => setActiveTab('pos')}
               items={items} equipmentSets={equipmentSets} suppliers={suppliers}
-              getSetPrice={getSetPrice} db={db} basePath={`users/${user.uid}`} 
+              getSetPrice={getSetPrice} db={db} basePath={BASE_PATH} 
               showAlert={showAlert} exchangeRates={exchangeRates} convertPrice={convertPrice} formatCur={formatCur}
+              loggedInEmployee={loggedInEmployee}
             />
           )}
-          {activeTab === 'suppliers' && <SupplierMaster suppliers={suppliers} db={db} basePath={`users/${user.uid}`} showConfirm={showConfirm} />}
-          {activeTab === 'items' && <ItemMaster items={items} suppliers={suppliers} db={db} basePath={`users/${user.uid}`} showConfirm={showConfirm} showAlert={showAlert} formatCur={formatCur} />}
-          {activeTab === 'sets' && <EquipmentSetMaster sets={equipmentSets} items={items} getSetPrice={getSetPrice} db={db} basePath={`users/${user.uid}`} showConfirm={showConfirm} showAlert={showAlert} suppliers={suppliers} convertPrice={convertPrice} formatCur={formatCur} exchangeRates={exchangeRates} />}
+          {activeTab === 'suppliers' && <SupplierMaster suppliers={suppliers} db={db} basePath={BASE_PATH} showConfirm={showConfirm} />}
+          {activeTab === 'items' && <ItemMaster items={items} suppliers={suppliers} db={db} basePath={BASE_PATH} showConfirm={showConfirm} showAlert={showAlert} formatCur={formatCur} />}
+          {activeTab === 'sets' && <EquipmentSetMaster sets={equipmentSets} items={items} getSetPrice={getSetPrice} db={db} basePath={BASE_PATH} showConfirm={showConfirm} showAlert={showAlert} suppliers={suppliers} convertPrice={convertPrice} formatCur={formatCur} exchangeRates={exchangeRates} />}
+          {activeTab === 'employees' && isAdmin && <EmployeeMaster employees={employees} db={db} basePath={BASE_PATH} showConfirm={showConfirm} showAlert={showAlert} />}
         </main>
       </div>
       <CustomModal {...modal} />
@@ -263,12 +416,152 @@ export default function App() {
   );
 }
 
-function SidebarButton({ icon: Icon, label, active, onClick }) {
+function SidebarButton({ icon: Icon, label, active, onClick, customClass }) {
+  let defaultClass = active ? 'bg-indigo-600 text-white shadow-md shadow-indigo-100' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900';
+  if (customClass) {
+    defaultClass = active ? customClass.split(' ').find(c => c.startsWith('data-[active=true]:'))?.replace('data-[active=true]:', '') || 'bg-emerald-600 text-white shadow-md shadow-emerald-100' : customClass.split(' ').filter(c => !c.startsWith('data-[active=true]:')).join(' ');
+  }
+
   return (
-    <button onClick={onClick} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all duration-200 ${active ? 'bg-indigo-600 text-white shadow-md shadow-indigo-100' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900'}`}>
+    <button onClick={onClick} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all duration-200 ${defaultClass}`}>
       <Icon size={18} />
       <span className="font-medium text-sm">{label}</span>
     </button>
+  );
+}
+
+// --- View: Employee Master (Admin Only) ---
+function EmployeeMaster({ employees, db, basePath, showConfirm, showAlert }) {
+  const [form, setForm] = useState({ username: '', name: '', password: '', role: 'employee' });
+  const [editingId, setEditingId] = useState(null);
+
+  const handleEdit = (emp) => {
+    setEditingId(emp.id);
+    setForm({ username: emp.username, name: emp.name, password: emp.password, role: emp.role || 'employee' });
+    window.scrollTo({top:0, behavior:'smooth'});
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setForm({ username: '', name: '', password: '', role: 'employee' });
+  };
+
+  const handleSave = async (e) => {
+    e.preventDefault();
+    if(!form.username.trim() || !form.name.trim() || !form.password.trim()) return;
+
+    // เช็ค Username ซ้ำ กรณีสร้างใหม่ หรือแก้ชื่อ Username
+    const isDuplicate = employees.some(emp => 
+      emp.id !== editingId && 
+      emp.username.toLowerCase() === form.username.trim().toLowerCase()
+    );
+
+    if (isDuplicate) {
+      showAlert('ข้อผิดพลาด', 'รหัสพนักงาน (Username) นี้มีผู้ใช้งานแล้ว โปรดใช้รหัสอื่น');
+      return;
+    }
+
+    const id = editingId || `EMP-${Date.now()}`;
+    await setDoc(doc(db, `${basePath}/employees`, id), {
+      ...form,
+      username: form.username.trim(),
+      updatedAt: serverTimestamp()
+    }, { merge: true });
+
+    showAlert('สำเร็จ', editingId ? 'อัปเดตข้อมูลพนักงานสำเร็จ' : 'เพิ่มพนักงานใหม่สำเร็จ');
+    cancelEdit();
+  };
+
+  const handleDelete = (id) => {
+    if (id === 'admin') {
+      showAlert('ไม่อนุญาต', 'ไม่สามารถลบบัญชีผู้ดูแลระบบเริ่มต้นได้');
+      return;
+    }
+    showConfirm('ยืนยันการลบ', 'คุณต้องการลบพนักงานคนนี้ออกจากระบบใช่หรือไม่?', async () => {
+      await deleteDoc(doc(db, `${basePath}/employees`, id));
+    });
+  };
+
+  return (
+    <div className="p-4 md:p-8 max-w-5xl mx-auto space-y-6">
+      <h2 className="text-2xl font-extrabold text-slate-900 tracking-tight flex items-center">
+        <Shield className="text-emerald-500 mr-3" size={28}/> จัดการผู้ใช้งานระบบ (Employee Management)
+      </h2>
+
+      <div className={`p-6 rounded-2xl border shadow-sm transition-all ${editingId ? 'border-emerald-300 bg-emerald-50/30' : 'border-slate-100 bg-white'}`}>
+        <h4 className={`font-bold mb-4 flex items-center ${editingId ? 'text-emerald-700' : 'text-slate-800'}`}>
+          {editingId ? <><Edit size={18} className="mr-2"/> กำลังแก้ไขข้อมูลพนักงาน</> : <><UserPlus size={18} className="mr-2 text-emerald-500"/> เพิ่มพนักงานใหม่</>}
+        </h4>
+        <form onSubmit={handleSave} className="grid grid-cols-1 md:grid-cols-12 gap-4">
+          <div className="md:col-span-3">
+            <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-widest mb-1">รหัสพนักงาน (Username)</label>
+            <input required placeholder="เช่น EMP001" value={form.username} onChange={e => setForm({...form, username: e.target.value})} disabled={editingId === 'admin'} className="w-full border rounded-xl p-3 text-sm outline-none focus:ring-2 focus:ring-emerald-500 bg-white disabled:bg-slate-100 disabled:text-slate-400"/>
+          </div>
+          <div className="md:col-span-4">
+            <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-widest mb-1">ชื่อ-นามสกุล</label>
+            <input required placeholder="ชื่อพนักงาน" value={form.name} onChange={e => setForm({...form, name: e.target.value})} className="w-full border rounded-xl p-3 text-sm outline-none focus:ring-2 focus:ring-emerald-500 bg-white"/>
+          </div>
+          <div className="md:col-span-3">
+            <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-widest mb-1">รหัสผ่าน (Password)</label>
+            <input required placeholder="ตั้งรหัสผ่าน" value={form.password} onChange={e => setForm({...form, password: e.target.value})} className="w-full border rounded-xl p-3 text-sm outline-none focus:ring-2 focus:ring-emerald-500 bg-white font-mono"/>
+          </div>
+          <div className="md:col-span-2">
+            <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-widest mb-1">สิทธิ์ (Role)</label>
+            <select value={form.role} onChange={e => setForm({...form, role: e.target.value})} disabled={editingId === 'admin'} className="w-full border rounded-xl p-3 text-sm outline-none focus:ring-2 focus:ring-emerald-500 bg-white font-bold disabled:bg-slate-100 disabled:text-slate-400">
+              <option value="employee">พนักงาน</option>
+              <option value="admin">แอดมิน</option>
+            </select>
+          </div>
+          <div className="md:col-span-12 flex gap-3 mt-2">
+            <button type="submit" className={`px-6 py-3 text-white rounded-xl font-bold shadow-lg transition-all active:scale-95 ${editingId ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-slate-800 hover:bg-slate-700'}`}>
+              {editingId ? 'บันทึกการแก้ไข' : 'เพิ่มพนักงาน'}
+            </button>
+            {editingId && (
+               <button type="button" onClick={cancelEdit} className="px-6 py-3 bg-white border border-slate-300 text-slate-600 rounded-xl font-bold hover:bg-slate-50 transition-all">ยกเลิก</button>
+            )}
+          </div>
+        </form>
+      </div>
+
+      <div className="bg-white rounded-2xl border shadow-sm overflow-hidden border-slate-100">
+        <div className="p-4 bg-slate-50 border-b font-bold text-xs text-slate-500 uppercase tracking-widest">รายชื่อผู้ใช้งานทั้งหมด ({employees.length})</div>
+        <table className="w-full text-left text-sm">
+          <thead className="bg-white border-b text-slate-400 font-medium">
+            <tr>
+              <th className="p-4">Username</th>
+              <th className="p-4">ชื่อพนักงาน</th>
+              <th className="p-4">รหัสผ่าน</th>
+              <th className="p-4 text-center">สิทธิ์ (Role)</th>
+              <th className="p-4 text-center">จัดการ</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-50">
+            {employees.map(emp => (
+              <tr key={emp.id} className="hover:bg-slate-50/50 transition-colors group">
+                <td className="p-4 font-bold text-slate-700 font-mono">{emp.username}</td>
+                <td className="p-4 text-slate-800">{emp.name} {emp.id === 'admin' && <span className="ml-2 text-[10px] bg-slate-100 text-slate-400 px-2 py-0.5 rounded-full">ค่าเริ่มต้น</span>}</td>
+                <td className="p-4 text-slate-400 font-mono">
+                  {/* แสดงรหัสผ่านให้แอดมินเห็นได้เพื่อการจัดการง่ายๆ */}
+                  <span className="bg-slate-100 px-2 py-1 rounded select-all">{emp.password}</span>
+                </td>
+                <td className="p-4 text-center">
+                  <span className={`inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-bold ${emp.role === 'admin' ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-700'}`}>
+                    {emp.role === 'admin' ? <Shield size={12} className="mr-1"/> : <UserCircle size={12} className="mr-1"/>}
+                    {emp.role === 'admin' ? 'แอดมิน' : 'พนักงาน'}
+                  </span>
+                </td>
+                <td className="p-4 text-center">
+                  <div className="flex justify-center space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button onClick={() => handleEdit(emp)} className="p-2 text-emerald-500 hover:bg-emerald-50 rounded-lg transition-colors" title="แก้ไข"><Edit size={16}/></button>
+                    <button onClick={() => handleDelete(emp.id)} disabled={emp.id === 'admin'} className="p-2 text-red-400 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-30 disabled:hover:bg-transparent" title="ลบ"><Trash2 size={16}/></button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
 
@@ -300,7 +593,7 @@ function POList({ purchaseOrders, onCreateNew, onEdit, db, basePath, showConfirm
               <thead className="bg-slate-50 text-[10px] font-bold text-slate-400 uppercase tracking-widest border-b">
                 <tr>
                   <th className="p-5">เลขที่อ้างอิง</th>
-                  <th className="p-5">วันที่</th>
+                  <th className="p-5">วันที่ / ผู้จัดทำ</th>
                   <th className="p-5">ซัพพลายเออร์</th>
                   <th className="p-5 text-center">จำนวนรายการ</th>
                   <th className="p-5 text-right">ยอดรวม</th>
@@ -315,7 +608,10 @@ function POList({ purchaseOrders, onCreateNew, onEdit, db, basePath, showConfirm
                   return (
                     <tr key={po.id} className="hover:bg-slate-50/50">
                       <td className="p-5 font-bold text-indigo-600 cursor-pointer" onClick={() => onEdit(po.id)}>{po.title || po.id}</td>
-                      <td className="p-5 text-slate-500">{po.createdAt?.toDate ? po.createdAt.toDate().toLocaleDateString('th-TH') : '-'}</td>
+                      <td className="p-5 text-slate-500">
+                        <div>{po.createdAt?.toDate ? po.createdAt.toDate().toLocaleDateString('th-TH') : '-'}</div>
+                        {po.createdBy && <div className="text-[10px] text-slate-400 mt-1">โดย: {po.createdBy}</div>}
+                      </td>
                       <td className="p-5 text-slate-700 font-medium">{supName}</td>
                       <td className="p-5 text-center"><span className="bg-slate-100 px-2 py-1 rounded text-xs font-bold text-slate-600">{lineCount} รายการ</span></td>
                       <td className="p-5 text-right font-bold text-slate-900 font-mono">
@@ -338,11 +634,11 @@ function POList({ purchaseOrders, onCreateNew, onEdit, db, basePath, showConfirm
 }
 
 // --- View: PO Editor ---
-function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, db, basePath, showAlert, exchangeRates, convertPrice, formatCur }) {
+function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, db, basePath, showAlert, exchangeRates, convertPrice, formatCur, loggedInEmployee }) {
   const [title, setTitle] = useState('');
   const [orderLines, setOrderLines] = useState([]); 
   
-  const [selectedSupId, setSelectedSupId] = useState(''); // เพิ่ม state สำหรับซัพพลายเออร์
+  const [selectedSupId, setSelectedSupId] = useState(''); 
   const [lineType, setLineType] = useState('item'); 
   const [searchLineTerm, setSearchLineTerm] = useState('');
   const [currentLineSelection, setCurrentLineSelection] = useState('');
@@ -352,6 +648,7 @@ function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, 
   
   const [poCurrency, setPoCurrency] = useState('THB');
   const [savedRates, setSavedRates] = useState(null); 
+  const [createdBy, setCreatedBy] = useState(loggedInEmployee?.name || '');
 
   useEffect(() => {
     if (poId) {
@@ -363,6 +660,7 @@ function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, 
           setOrderLines(loadedLines);
           setPoCurrency(data.currency || 'THB');
           setSavedRates(data.exchangeRates || null);
+          setCreatedBy(data.createdBy || loggedInEmployee?.name || '');
           if (data.supplierId) {
             setSelectedSupId(data.supplierId);
           }
@@ -374,26 +672,12 @@ function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, 
       setSavedRates(null);
       setOrderLines([]);
       setSelectedSupId('');
+      setCreatedBy(loggedInEmployee?.name || '');
     }
-  }, [poId, db, basePath]);
-
-  // Backward compatibility สำหรับ PO เก่าที่ยังไม่มี supplierId
-  useEffect(() => {
-    if (poId && !selectedSupId && orderLines.length > 0 && equipmentSets.length > 0 && items.length > 0) {
-      const firstLine = orderLines[0];
-      if (firstLine.type === 'set') {
-        const s = equipmentSets.find(e => e.id === firstLine.refId);
-        if (s && s.supplierId) setSelectedSupId(s.supplierId);
-      } else {
-        const i = items.find(e => e.id === firstLine.refId);
-        if (i && i.supplierId) setSelectedSupId(i.supplierId);
-      }
-    }
-  }, [poId, selectedSupId, orderLines, equipmentSets, items]);
+  }, [poId, db, basePath, loggedInEmployee]);
 
   const effectiveRates = savedRates || exchangeRates;
 
-  // กรองชุดอุปกรณ์และสินค้าเฉพาะของซัพพลายเออร์ที่เลือก
   const filteredSets = equipmentSets.filter(s => 
     s.supplierId === selectedSupId && 
     s.name.toLowerCase().includes(searchLineTerm.toLowerCase())
@@ -428,7 +712,6 @@ function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, 
       const discount = item?.discountPercent || 0;
       const netPriceOrig = price * (1 - discount / 100);
       
-      // Convert to PO Currency
       const convertedFullPrice = convertPrice(price, itemCur, poCurrency, effectiveRates);
       const convertedNetPrice = convertPrice(netPriceOrig, itemCur, poCurrency, effectiveRates);
 
@@ -486,8 +769,9 @@ function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, 
       orderLines, 
       totalAmount: total, 
       currency: poCurrency,
-      exchangeRates: effectiveRates, // Snapshot rates
-      supplierId: selectedSupId, // บันทึก supplier ID ลงไปใน PO
+      exchangeRates: effectiveRates, 
+      supplierId: selectedSupId,
+      createdBy: createdBy, // บันทึกชื่อผู้จัดทำ
       createdAt: serverTimestamp() 
     }, { merge: true });
     
@@ -694,181 +978,196 @@ function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, 
         )}
       </div>
 
-      {selectedSupId && (
-        <div className="space-y-10 print:space-y-0">
-          {/* Report 1 */}
-          <div className={`bg-white border rounded-2xl overflow-hidden shadow-sm print:border-none print:shadow-none print:rounded-none ${printMode === 'report2' ? 'print:hidden' : ''}`}>
-            
-            <div className="hidden print:block mb-6 text-center border-b-2 border-slate-800 pb-4">
-              <h1 className="text-2xl font-bold text-slate-900 uppercase">ใบสั่งซื้อ (Purchase Order)</h1>
-              <div className="flex justify-between mt-4 text-sm font-bold text-slate-700">
-                <span>เลขที่อ้างอิง: {title}</span>
-                <span>วันที่พิมพ์: {new Date().toLocaleDateString('th-TH')}</span>
-              </div>
-            </div>
-
-            <div className="bg-slate-50 p-4 border-b flex justify-between items-center print:hidden">
-              <span className="font-bold text-slate-800">รายงาน 1: รายการในบิลสั่งซื้อ (ชุดอุปกรณ์ และ สินค้ารายตัว)</span>
-              <button onClick={exportReport1} className="text-xs flex items-center bg-white border border-slate-200 px-3 py-1.5 rounded-lg text-slate-600 hover:bg-slate-50 shadow-sm font-medium transition-colors">
-                <Download size={14} className="mr-1.5"/> Export CSV
-              </button>
-            </div>
-            <table className="w-full text-sm text-left print:border-collapse print:w-full">
-              <thead className="bg-slate-50 border-b text-[10px] font-bold text-slate-400 uppercase tracking-widest print-table-header print:bg-slate-100 print:text-slate-800 print:text-xs">
-                <tr><th className="p-4 print:border print:border-slate-300">ประเภท</th><th className="p-4 print:border print:border-slate-300">รายการ</th><th className="p-4 text-center print:border print:border-slate-300">จำนวน</th><th className="p-4 text-right print:border print:border-slate-300">ราคาหน่วย</th><th className="p-4 text-right print:border print:border-slate-300">ราคารวม</th><th className="p-4 print:hidden text-center">จัดการ</th></tr>
-              </thead>
-              <tbody className="divide-y text-[13px] print:divide-y-0">
-                {orderLines.map((line, i) => {
-                  let name = '';
-                  let price = 0;
-                  let isSet = line.type === 'set';
-                  
-                  if (isSet) {
-                    const s = equipmentSets.find(e => e.id === line.refId);
-                    name = s?.name || 'Unknown Set';
-                    price = getSetPrice(line.refId, poCurrency, effectiveRates);
-                  } else {
-                    const itm = items.find(e => e.id === line.refId);
-                    name = itm ? `[${itm.code}] ${itm.itemName}` : 'Unknown Item';
-                    const itemCur = itm?.currency || 'THB';
-                    const netOrig = (itm?.pricePerUnit || 0) * (1 - (itm?.discountPercent || 0)/100);
-                    price = convertPrice(netOrig, itemCur, poCurrency, effectiveRates);
-                  }
-
-                  return (
-                    <tr key={i} className="hover:bg-slate-50/50 print-avoid-break">
-                      <td className="p-4 print:border print:border-slate-300">
-                        <span className={`px-2 py-1 rounded text-[10px] font-bold ${isSet ? 'bg-indigo-100 text-indigo-700' : 'bg-emerald-100 text-emerald-700'} print:bg-transparent print:p-0 print:text-slate-800 print:text-xs`}>
-                          {isSet ? 'ชุดอุปกรณ์' : 'สินค้ารายชิ้น'}
-                        </span>
-                      </td>
-                      <td className="p-4 font-bold text-slate-700 print:border print:border-slate-300 print:text-xs">{name}</td>
-                      <td className="p-4 text-center print:border print:border-slate-300 print:p-2">
-                        <input 
-                          type="number" min="0.01" step="any" value={line.quantity} 
-                          onChange={(e) => {
-                            const newQty = e.target.value === '' ? '' : parseFloat(e.target.value);
-                            const newLines = [...orderLines];
-                            newLines[i].quantity = newQty || 0;
-                            setOrderLines(newLines);
-                          }}
-                          className="w-20 border border-slate-300 rounded-lg p-1.5 text-center text-sm outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 font-bold text-indigo-600 bg-white shadow-sm print:border-none print:shadow-none print:bg-transparent print:p-0 print:text-slate-900 print:w-auto"
-                          title="แก้ไขจำนวน"
-                        />
-                      </td>
-                      <td className="p-4 text-right font-mono print:border print:border-slate-300 print:text-xs">{formatCur(price, poCurrency)}</td>
-                      <td className="p-4 text-right font-bold text-slate-900 font-mono print:border print:border-slate-300 print:text-xs">{formatCur(price * line.quantity, poCurrency)}</td>
-                      <td className="p-4 text-center print:hidden"><button type="button" onClick={(e) => { e.preventDefault(); setOrderLines(orderLines.filter((_, idx) => idx !== i)); }} className="text-red-400 p-1 hover:bg-red-50 rounded transition-colors"><Trash2 size={14}/></button></td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-              <tfoot>
-                <tr className="bg-indigo-50/50 font-bold print:bg-slate-100 print-avoid-break">
-                  <td colSpan="4" className="p-4 text-right print:border print:border-slate-300">ยอดรวมทั้งสิ้น (Total)</td>
-                  <td className="p-4 text-right text-indigo-700 font-mono print:border print:border-slate-300 print:text-slate-900">
-                    {formatCur(orderLines.reduce((sum, line) => {
-                      let p = 0;
-                      if (line.type === 'set') p = getSetPrice(line.refId, poCurrency, effectiveRates);
-                      else {
-                        const itm = items.find(e => e.id === line.refId);
-                        const itemCur = itm?.currency || 'THB';
-                        const netOrig = (itm?.pricePerUnit || 0) * (1 - (itm?.discountPercent || 0)/100);
-                        p = convertPrice(netOrig, itemCur, poCurrency, effectiveRates);
-                      }
-                      return sum + (p * line.quantity);
-                    }, 0), poCurrency)}
-                  </td>
-                  <td className="print:hidden"></td>
-                </tr>
-              </tfoot>
-            </table>
-            
-            <div className="hidden print:flex justify-between mt-20 px-10">
-              <div className="text-center">
-                <div className="border-b border-slate-400 w-40 mx-auto mb-2"></div>
-                <div className="text-sm font-bold">ผู้จัดทำ (Prepared By)</div>
-                <div className="text-xs text-slate-500 mt-1">วันที่ (Date): ____/____/____</div>
-              </div>
-              <div className="text-center">
-                <div className="border-b border-slate-400 w-40 mx-auto mb-2"></div>
-                <div className="text-sm font-bold">ผู้อนุมัติ (Approved By)</div>
-                <div className="text-xs text-slate-500 mt-1">วันที่ (Date): ____/____/____</div>
-              </div>
+      <div className="space-y-10 print:space-y-0">
+        {/* Report 1 */}
+        <div className={`bg-white border rounded-2xl overflow-hidden shadow-sm print:border-none print:shadow-none print:rounded-none ${printMode === 'report2' ? 'print:hidden' : ''}`}>
+          
+          <div className="hidden print:block mb-6 text-center border-b-2 border-slate-800 pb-4">
+            <h1 className="text-2xl font-bold text-slate-900 uppercase">ใบสั่งซื้อ (Purchase Order)</h1>
+            <div className="flex justify-between mt-4 text-sm font-bold text-slate-700">
+              <span>เลขที่อ้างอิง: {title}</span>
+              <span>วันที่พิมพ์: {new Date().toLocaleDateString('th-TH')}</span>
             </div>
           </div>
 
-          {/* Report 2 */}
-          <div className={`bg-white border rounded-2xl overflow-hidden shadow-sm print:border-none print:shadow-none print:rounded-none ${printMode === 'report1' ? 'print:hidden' : ''}`}>
-            
-            <div className="hidden print:block mb-6 text-center border-b-2 border-slate-800 pb-4 print:mt-0">
-              <h1 className="text-2xl font-bold text-slate-900 uppercase">สรุปรายการเบิกสินค้าย่อย (Item Summary)</h1>
-              <div className="flex justify-between mt-4 text-sm font-bold text-slate-700">
-                <span>อ้างอิงจากใบสั่งซื้อ: {title}</span>
-                <span>วันที่พิมพ์: {new Date().toLocaleDateString('th-TH')}</span>
-              </div>
-            </div>
+          <div className="bg-slate-50 p-4 border-b flex justify-between items-center print:hidden">
+            <span className="font-bold text-slate-800">รายงาน 1: รายการในบิลสั่งซื้อ (ชุดอุปกรณ์ และ สินค้ารายตัว)</span>
+            <button onClick={exportReport1} className="text-xs flex items-center bg-white border border-slate-200 px-3 py-1.5 rounded-lg text-slate-600 hover:bg-slate-50 shadow-sm font-medium transition-colors">
+              <Download size={14} className="mr-1.5"/> Export CSV
+            </button>
+          </div>
+          <table className="w-full text-sm text-left print:border-collapse print:w-full">
+            <thead className="bg-slate-50 border-b text-[10px] font-bold text-slate-400 uppercase tracking-widest print-table-header print:bg-slate-100 print:text-slate-800 print:text-xs">
+              <tr><th className="p-4 print:border print:border-slate-300">ประเภท</th><th className="p-4 print:border print:border-slate-300">รายการ</th><th className="p-4 text-center print:border print:border-slate-300">จำนวน</th><th className="p-4 text-right print:border print:border-slate-300">ราคาหน่วย</th><th className="p-4 text-right print:border print:border-slate-300">ราคารวม</th><th className="p-4 print:hidden text-center">จัดการ</th></tr>
+            </thead>
+            <tbody className="divide-y text-[13px] print:divide-y-0">
+              {orderLines.map((line, i) => {
+                let name = '';
+                let price = 0;
+                let isSet = line.type === 'set';
+                
+                if (isSet) {
+                  const s = equipmentSets.find(e => e.id === line.refId);
+                  name = s?.name || 'Unknown Set';
+                  price = getSetPrice(line.refId, poCurrency, effectiveRates);
+                } else {
+                  const itm = items.find(e => e.id === line.refId);
+                  name = itm ? `[${itm.code}] ${itm.itemName}` : 'Unknown Item';
+                  const itemCur = itm?.currency || 'THB';
+                  const netOrig = (itm?.pricePerUnit || 0) * (1 - (itm?.discountPercent || 0)/100);
+                  price = convertPrice(netOrig, itemCur, poCurrency, effectiveRates);
+                }
 
-            <div className="bg-slate-50 p-4 border-b flex justify-between items-center print:hidden">
-              <span className="font-bold text-slate-800">รายงาน 2: สรุปรายการสินค้าย่อยทั้งหมด</span>
-              <button onClick={exportReport2} className="text-xs flex items-center bg-white border border-slate-200 px-3 py-1.5 rounded-lg text-slate-600 hover:bg-slate-50 shadow-sm font-medium transition-colors">
-                <Download size={14} className="mr-1.5"/> Export CSV
-              </button>
+                return (
+                  <tr key={i} className="hover:bg-slate-50/50 print-avoid-break">
+                    <td className="p-4 print:border print:border-slate-300">
+                      <span className={`px-2 py-1 rounded text-[10px] font-bold ${isSet ? 'bg-indigo-100 text-indigo-700' : 'bg-emerald-100 text-emerald-700'} print:bg-transparent print:p-0 print:text-slate-800 print:text-xs`}>
+                        {isSet ? 'ชุดอุปกรณ์' : 'สินค้ารายชิ้น'}
+                      </span>
+                    </td>
+                    <td className="p-4 font-bold text-slate-700 print:border print:border-slate-300 print:text-xs">{name}</td>
+                    <td className="p-4 text-center print:border print:border-slate-300 print:p-2">
+                      <input 
+                        type="number" min="0.01" step="any" value={line.quantity} 
+                        onChange={(e) => {
+                          const newQty = e.target.value === '' ? '' : parseFloat(e.target.value);
+                          const newLines = [...orderLines];
+                          newLines[i].quantity = newQty || 0;
+                          setOrderLines(newLines);
+                        }}
+                        className="w-20 border border-slate-300 rounded-lg p-1.5 text-center text-sm outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 font-bold text-indigo-600 bg-white shadow-sm print:border-none print:shadow-none print:bg-transparent print:p-0 print:text-slate-900 print:w-auto"
+                        title="แก้ไขจำนวน"
+                      />
+                    </td>
+                    <td className="p-4 text-right font-mono print:border print:border-slate-300 print:text-xs">{formatCur(price, poCurrency)}</td>
+                    <td className="p-4 text-right font-bold text-slate-900 font-mono print:border print:border-slate-300 print:text-xs">{formatCur(price * line.quantity, poCurrency)}</td>
+                    <td className="p-4 text-center print:hidden"><button type="button" onClick={(e) => { e.preventDefault(); setOrderLines(orderLines.filter((_, idx) => idx !== i)); }} className="text-red-400 p-1 hover:bg-red-50 rounded transition-colors"><Trash2 size={14}/></button></td>
+                  </tr>
+                )
+              })}
+            </tbody>
+            <tfoot>
+              <tr className="bg-indigo-50/50 font-bold print:bg-slate-100 print-avoid-break">
+                <td colSpan="4" className="p-4 text-right print:border print:border-slate-300">ยอดรวมทั้งสิ้น (Total)</td>
+                <td className="p-4 text-right text-indigo-700 font-mono print:border print:border-slate-300 print:text-slate-900">
+                  {formatCur(orderLines.reduce((sum, line) => {
+                    let p = 0;
+                    if (line.type === 'set') p = getSetPrice(line.refId, poCurrency, effectiveRates);
+                    else {
+                      const itm = items.find(e => e.id === line.refId);
+                      const itemCur = itm?.currency || 'THB';
+                      const netOrig = (itm?.pricePerUnit || 0) * (1 - (itm?.discountPercent || 0)/100);
+                      p = convertPrice(netOrig, itemCur, poCurrency, effectiveRates);
+                    }
+                    return sum + (p * line.quantity);
+                  }, 0), poCurrency)}
+                </td>
+                <td className="print:hidden"></td>
+              </tr>
+            </tfoot>
+          </table>
+          
+          <div className="hidden print:flex justify-between mt-20 px-10">
+            <div className="text-center">
+              <div className="border-b border-slate-400 w-40 mx-auto mb-2"></div>
+              <div className="text-sm font-bold">ผู้จัดทำ (Prepared By)</div>
+              <div className="text-xs text-slate-500 mt-1">{createdBy}</div>
+              <div className="text-xs text-slate-500 mt-1">วันที่ (Date): ____/____/____</div>
             </div>
-            <table className="w-full text-sm text-left print:border-collapse print:w-full">
-              <thead className="bg-slate-50 border-b text-[10px] font-bold text-slate-400 uppercase tracking-widest print-table-header print:bg-slate-100 print:text-slate-800 print:text-xs">
-                <tr>
-                  <th className="p-4 print:border print:border-slate-300">ซัพพลายเออร์</th>
-                  <th className="p-4 print:border print:border-slate-300">ชื่อสินค้า</th>
-                  <th className="p-4 text-right font-mono print:border print:border-slate-300">ราคา (สุทธิ)</th>
-                  <th className="p-4 text-center print:border print:border-slate-300">MOQ (เงื่อนไข)</th>
-                  <th className="p-4 text-center print:border print:border-slate-300">รวมจำนวน</th>
-                  <th className="p-4 text-right font-mono print:border print:border-slate-300">ราคารวม</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y text-[13px] print:divide-y-0">
-                {report2Rows.map((r, i) => {
-                  const isMoqFailed = r.missingQty > 0;
-                  const moqWarningTitle = r.moqType === 'multiple' ? `ต้องสั่งทีละ ${r.moq} ${r.unit}` : `ต้องสั่งขั้นต่ำ ${r.moq} ${r.unit}`;
-                  const moqDisplay = r.moqType === 'multiple' ? `ทุกๆ ${r.moq}` : `ขั้นต่ำ ${r.moq}`;
-
-                  return (
-                    <tr key={i} className={`${isMoqFailed ? 'bg-red-50/50' : 'hover:bg-slate-50/50'} print-avoid-break print:bg-transparent`}>
-                      <td className="p-4 print:border print:border-slate-300 print:text-xs"><span className="bg-slate-100 text-slate-600 px-2 py-1 rounded text-[10px] font-bold print:bg-transparent print:p-0 print:text-slate-900 print:text-xs">{r.supplierName}</span></td>
-                      <td className="p-4 print:border print:border-slate-300 print:text-xs">
-                        <div className="font-bold flex items-center">
-                          {r.itemName}
-                          {isMoqFailed && <AlertTriangle size={14} className="text-red-500 ml-2 print:hidden" title={moqWarningTitle} />}
-                        </div>
-                        <div className="text-[11px] text-slate-400 mt-0.5 print:text-slate-600">{r.code} | {r.category}</div>
-                      </td>
-                      <td className="p-4 text-right font-mono text-slate-500 print:border print:border-slate-300 print:text-slate-900 print:text-xs">
-                        {r.discountPercent > 0 && <div className="text-[10px] text-red-400 line-through print:hidden">{formatCur(r.fullPrice, poCurrency)}</div>}
-                        <div className="text-slate-700 print:text-slate-900">{formatCur(r.netPrice, poCurrency)}</div>
-                      </td>
-                      <td className="p-4 text-center print:border print:border-slate-300 print:text-xs">
-                        {r.moq > 0 ? <span className="bg-amber-100 text-amber-700 px-2 py-1 rounded text-[11px] font-bold whitespace-nowrap print:bg-transparent print:text-slate-900 print:p-0">{moqDisplay}</span> : <span className="text-slate-300 print:text-slate-600">-</span>}
-                      </td>
-                      <td className="p-4 text-center print:border print:border-slate-300 print:text-xs">
-                        <div className={`font-bold ${isMoqFailed ? 'text-red-600' : 'text-indigo-600'} print:text-slate-900`}>{r.qty} {r.unit}</div>
-                        {isMoqFailed && (
-                          <button onClick={() => adjustMOQ(r.id, r.missingQty)} className="mt-2 text-[10px] font-bold bg-green-100 text-green-700 px-2 py-1 rounded flex items-center justify-center mx-auto hover:bg-green-200 transition-colors print:hidden shadow-sm">
-                            <ArrowUpCircle size={12} className="mr-1"/> ปรับยอดอัตโนมัติ (+{r.missingQty})
-                          </button>
-                        )}
-                      </td>
-                      <td className="p-4 text-right font-bold text-slate-900 font-mono print:border print:border-slate-300 print:text-xs">{formatCur(r.total, poCurrency)}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-              <tfoot>
-                <tr className="bg-indigo-50/50 font-bold print:bg-slate-100 print-avoid-break"><td colSpan="5" className="p-4 text-right print:border print:border-slate-300">ยอดรวมทั้งสิ้น (Total)</td><td className="p-4 text-right text-indigo-700 font-mono print:border print:border-slate-300 print:text-slate-900">{formatCur(report2Rows.reduce((sum, r) => sum + r.total, 0), poCurrency)}</td></tr>
-              </tfoot>
-            </table>
+            <div className="text-center">
+              <div className="border-b border-slate-400 w-40 mx-auto mb-2"></div>
+              <div className="text-sm font-bold">ผู้อนุมัติ (Approved By)</div>
+              <div className="text-xs text-slate-500 mt-1"><br/></div>
+              <div className="text-xs text-slate-500 mt-1">วันที่ (Date): ____/____/____</div>
+            </div>
           </div>
         </div>
-      )}
+
+        {/* Report 2 */}
+        <div className={`bg-white border rounded-2xl overflow-hidden shadow-sm print:border-none print:shadow-none print:rounded-none ${printMode === 'report1' ? 'print:hidden' : ''}`}>
+          
+          <div className="hidden print:block mb-6 text-center border-b-2 border-slate-800 pb-4 print:mt-0">
+            <h1 className="text-2xl font-bold text-slate-900 uppercase">สรุปรายการเบิกสินค้าย่อย (Item Summary)</h1>
+            <div className="flex justify-between mt-4 text-sm font-bold text-slate-700">
+              <span>อ้างอิงจากใบสั่งซื้อ: {title}</span>
+              <span>วันที่พิมพ์: {new Date().toLocaleDateString('th-TH')}</span>
+            </div>
+          </div>
+
+          <div className="bg-slate-50 p-4 border-b flex justify-between items-center print:hidden">
+            <span className="font-bold text-slate-800">รายงาน 2: สรุปรายการสินค้าย่อยทั้งหมด</span>
+            <button onClick={exportReport2} className="text-xs flex items-center bg-white border border-slate-200 px-3 py-1.5 rounded-lg text-slate-600 hover:bg-slate-50 shadow-sm font-medium transition-colors">
+              <Download size={14} className="mr-1.5"/> Export CSV
+            </button>
+          </div>
+          <table className="w-full text-sm text-left print:border-collapse print:w-full">
+            <thead className="bg-slate-50 border-b text-[10px] font-bold text-slate-400 uppercase tracking-widest print-table-header print:bg-slate-100 print:text-slate-800 print:text-xs">
+              <tr>
+                <th className="p-4 print:border print:border-slate-300">ซัพพลายเออร์</th>
+                <th className="p-4 print:border print:border-slate-300">ชื่อสินค้า</th>
+                <th className="p-4 text-right font-mono print:border print:border-slate-300">ราคา (สุทธิ)</th>
+                <th className="p-4 text-center print:border print:border-slate-300">MOQ (เงื่อนไข)</th>
+                <th className="p-4 text-center print:border print:border-slate-300">รวมจำนวน</th>
+                <th className="p-4 text-right font-mono print:border print:border-slate-300">ราคารวม</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y text-[13px] print:divide-y-0">
+              {report2Rows.map((r, i) => {
+                const isMoqFailed = r.missingQty > 0;
+                const moqWarningTitle = r.moqType === 'multiple' ? `ต้องสั่งทีละ ${r.moq} ${r.unit}` : `ต้องสั่งขั้นต่ำ ${r.moq} ${r.unit}`;
+                const moqDisplay = r.moqType === 'multiple' ? `ทุกๆ ${r.moq}` : `ขั้นต่ำ ${r.moq}`;
+
+                return (
+                  <tr key={i} className={`${isMoqFailed ? 'bg-red-50/50' : 'hover:bg-slate-50/50'} print-avoid-break print:bg-transparent`}>
+                    <td className="p-4 print:border print:border-slate-300 print:text-xs"><span className="bg-slate-100 text-slate-600 px-2 py-1 rounded text-[10px] font-bold print:bg-transparent print:p-0 print:text-slate-900 print:text-xs">{r.supplierName}</span></td>
+                    <td className="p-4 print:border print:border-slate-300 print:text-xs">
+                      <div className="font-bold flex items-center">
+                        {r.itemName}
+                        {isMoqFailed && <AlertTriangle size={14} className="text-red-500 ml-2 print:hidden" title={moqWarningTitle} />}
+                      </div>
+                      <div className="text-[11px] text-slate-400 mt-0.5 print:text-slate-600">{r.code} | {r.category}</div>
+                    </td>
+                    <td className="p-4 text-right font-mono text-slate-500 print:border print:border-slate-300 print:text-slate-900 print:text-xs">
+                      {r.discountPercent > 0 && <div className="text-[10px] text-red-400 line-through print:hidden">{formatCur(r.fullPrice, poCurrency)}</div>}
+                      <div className="text-slate-700 print:text-slate-900">{formatCur(r.netPrice, poCurrency)}</div>
+                    </td>
+                    <td className="p-4 text-center print:border print:border-slate-300 print:text-xs">
+                      {r.moq > 0 ? <span className="bg-amber-100 text-amber-700 px-2 py-1 rounded text-[11px] font-bold whitespace-nowrap print:bg-transparent print:text-slate-900 print:p-0">{moqDisplay}</span> : <span className="text-slate-300 print:text-slate-600">-</span>}
+                    </td>
+                    <td className="p-4 text-center print:border print:border-slate-300 print:text-xs">
+                      <div className={`font-bold ${isMoqFailed ? 'text-red-600' : 'text-indigo-600'} print:text-slate-900`}>{r.qty} {r.unit}</div>
+                      {isMoqFailed && (
+                        <button onClick={() => adjustMOQ(r.id, r.missingQty)} className="mt-2 text-[10px] font-bold bg-green-100 text-green-700 px-2 py-1 rounded flex items-center justify-center mx-auto hover:bg-green-200 transition-colors print:hidden shadow-sm">
+                          <ArrowUpCircle size={12} className="mr-1"/> ปรับยอดอัตโนมัติ (+{r.missingQty})
+                        </button>
+                      )}
+                    </td>
+                    <td className="p-4 text-right font-bold text-slate-900 font-mono print:border print:border-slate-300 print:text-xs">{formatCur(r.total, poCurrency)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+            <tfoot>
+              <tr className="bg-indigo-50/50 font-bold print:bg-slate-100 print-avoid-break"><td colSpan="5" className="p-4 text-right print:border print:border-slate-300">ยอดรวมทั้งสิ้น (Total)</td><td className="p-4 text-right text-indigo-700 font-mono print:border print:border-slate-300 print:text-slate-900">{formatCur(report2Rows.reduce((sum, r) => sum + r.total, 0), poCurrency)}</td></tr>
+            </tfoot>
+          </table>
+          
+          <div className="hidden print:flex justify-between mt-20 px-10">
+            <div className="text-center">
+              <div className="border-b border-slate-400 w-40 mx-auto mb-2"></div>
+              <div className="text-sm font-bold">ผู้จัดทำ (Prepared By)</div>
+              <div className="text-xs text-slate-500 mt-1">{createdBy}</div>
+              <div className="text-xs text-slate-500 mt-1">วันที่ (Date): ____/____/____</div>
+            </div>
+            <div className="text-center">
+              <div className="border-b border-slate-400 w-40 mx-auto mb-2"></div>
+              <div className="text-sm font-bold">ผู้อนุมัติ (Approved By)</div>
+              <div className="text-xs text-slate-500 mt-1"><br/></div>
+              <div className="text-xs text-slate-500 mt-1">วันที่ (Date): ____/____/____</div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -881,7 +1180,7 @@ function EquipmentSetMaster({ sets, items, getSetPrice, db, basePath, showConfir
   const [curQty, setCurQty] = useState('');
   const [editingId, setEditingId] = useState(null);
   const [selectedSupId, setSelectedSupId] = useState('');
-  const [setCurrency, setSetCurrency] = useState('THB'); // เพิ่ม State สกุลเงินชุดอุปกรณ์
+  const [setCurrency, setSetCurrency] = useState('THB'); 
   
   const [searchTerm, setSearchTerm] = useState('');
   const [showImportModal, setShowImportModal] = useState(false);
@@ -899,7 +1198,6 @@ function EquipmentSetMaster({ sets, items, getSetPrice, db, basePath, showConfir
         const price = item.pricePerUnit || 0;
         const discount = item.discountPercent || 0;
         
-        // แปลงค่าเงินย่อยให้เป็นค่าเงินของชุดอุปกรณ์
         const convertedPrice = convertPrice(price, itemCur, setCurrency, exchangeRates);
         
         acc.totalFullPrice += convertedPrice * si.quantity;
