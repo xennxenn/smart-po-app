@@ -341,7 +341,7 @@ function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, 
   const [lineType, setLineType] = useState('item'); 
   const [searchLineTerm, setSearchLineTerm] = useState('');
   const [currentLineSelection, setCurrentLineSelection] = useState('');
-  const [currentQty, setCurrentQty] = useState(1);
+  const [currentQty, setCurrentQty] = useState('');
   const [saving, setSaving] = useState(false);
   const [printMode, setPrintMode] = useState(null); 
   
@@ -467,8 +467,10 @@ function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, 
   const handleAddLine = () => {
     if(!currentLineSelection) return;
     const [type, id] = currentLineSelection.split('|');
-    setOrderLines([...orderLines, { type, refId: id, quantity: currentQty }]);
+    const qty = parseFloat(currentQty) || 1;
+    setOrderLines([...orderLines, { type, refId: id, quantity: qty }]);
     setCurrentLineSelection('');
+    setCurrentQty('');
   };
 
   const adjustMOQ = (itemId, missingQty) => {
@@ -639,7 +641,7 @@ function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, 
               })}
             </select>
             <div className="flex gap-2">
-              <input type="number" min="1" value={currentQty} onChange={e => setCurrentQty(parseInt(e.target.value)||1)} className="w-20 border rounded-xl p-3 outline-none text-center" title="จำนวน"/>
+              <input type="number" min="0.01" step="any" value={currentQty} onChange={e => setCurrentQty(e.target.value)} className="w-20 border rounded-xl p-3 outline-none text-center" title="จำนวน" placeholder="จำนวน"/>
               <button onClick={handleAddLine} className="bg-slate-800 text-white px-6 py-3 rounded-xl font-bold transition-all active:scale-95 whitespace-nowrap">เพิ่มลงบิล</button>
             </div>
           </div>
@@ -696,11 +698,11 @@ function POEditor({ poId, onBack, items, equipmentSets, suppliers, getSetPrice, 
                     <td className="p-4 font-bold text-slate-700 print:border print:border-slate-300 print:text-xs">{name}</td>
                     <td className="p-4 text-center print:border print:border-slate-300 print:p-2">
                       <input 
-                        type="number" min="1" value={line.quantity} 
+                        type="number" min="0.01" step="any" value={line.quantity} 
                         onChange={(e) => {
-                          const newQty = parseInt(e.target.value) || 1;
+                          const newQty = e.target.value === '' ? '' : parseFloat(e.target.value);
                           const newLines = [...orderLines];
-                          newLines[i].quantity = newQty;
+                          newLines[i].quantity = newQty || 0;
                           setOrderLines(newLines);
                         }}
                         className="w-20 border border-slate-300 rounded-lg p-1.5 text-center text-sm outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 font-bold text-indigo-600 bg-white shadow-sm print:border-none print:shadow-none print:bg-transparent print:p-0 print:text-slate-900 print:w-auto"
@@ -828,7 +830,7 @@ function EquipmentSetMaster({ sets, items, getSetPrice, db, basePath, showConfir
   const [name, setName] = useState('');
   const [setItems, setSetItems] = useState([]);
   const [curItem, setCurItem] = useState('');
-  const [curQty, setCurQty] = useState(1);
+  const [curQty, setCurQty] = useState('');
   const [editingId, setEditingId] = useState(null);
   const [selectedSupId, setSelectedSupId] = useState('');
   const [setCurrency, setSetCurrency] = useState('THB'); // เพิ่ม State สกุลเงินชุดอุปกรณ์
@@ -883,7 +885,7 @@ function EquipmentSetMaster({ sets, items, getSetPrice, db, basePath, showConfir
 
         if (cols.length >= 2) {
           const code = cols[0].trim();
-          const qty = parseInt(cols[1]) || 1;
+          const qty = parseFloat(cols[1]) || 1;
           const matches = itemsForSelectedSupplier.filter(i => i.code === code);
 
           if (matches.length === 1) {
@@ -983,8 +985,8 @@ function EquipmentSetMaster({ sets, items, getSetPrice, db, basePath, showConfir
                   })}
                 </select>
                 <div className="flex gap-2">
-                  <input type="number" min="1" value={curQty} onChange={e => setCurQty(parseInt(e.target.value)||1)} className="w-20 border rounded-lg p-2.5 outline-none text-center"/>
-                  <button onClick={() => { if(curItem) { setSetItems([...setItems, {itemId: curItem, quantity: curQty}]); setCurItem(''); } }} className="bg-slate-800 text-white px-6 rounded-lg font-bold hover:bg-slate-700">เพิ่ม</button>
+                  <input type="number" min="0.01" step="any" value={curQty} onChange={e => setCurQty(e.target.value)} className="w-20 border rounded-lg p-2.5 outline-none text-center" placeholder="จำนวน"/>
+                  <button onClick={() => { if(curItem) { setSetItems([...setItems, {itemId: curItem, quantity: parseFloat(curQty) || 1}]); setCurItem(''); setCurQty(''); } }} className="bg-slate-800 text-white px-6 rounded-lg font-bold hover:bg-slate-700">เพิ่ม</button>
                 </div>
               </div>
             </div>
@@ -1198,7 +1200,7 @@ function ItemMaster({ items, suppliers, db, basePath, showConfirm, showAlert, fo
       supplierId: selectedSupId, 
       pricePerUnit: parseFloat(form.pricePerUnit) || 0,
       discountPercent: parseFloat(form.discountPercent) || 0,
-      moq: parseInt(form.moq) || 0,
+      moq: parseFloat(form.moq) || 0,
       moqType: form.moqType || 'minimum'
     };
 
@@ -1231,7 +1233,7 @@ function ItemMaster({ items, suppliers, db, basePath, showConfirm, showAlert, fo
           
           if (cols.length >= 5) unit = cols[4].trim();
           if (cols.length >= 6) discountPercent = parseFloat(cols[5]) || 0;
-          if (cols.length >= 7) moq = parseInt(cols[6]) || 0;
+          if (cols.length >= 7) moq = parseFloat(cols[6]) || 0;
           if (cols.length >= 8) {
             const mt = cols[7].trim().toLowerCase();
             if (mt === 'multiple' || mt === 'ทุกๆ' || mt === 'ทวีคูณ') moqType = 'multiple';
@@ -1303,7 +1305,7 @@ function ItemMaster({ items, suppliers, db, basePath, showConfirm, showAlert, fo
                 <div className="md:col-span-3"><input placeholder="Unit (หน่วย)" value={form.unit} onChange={e => setForm({...form, unit: e.target.value})} className="w-full border rounded-lg p-2.5 text-sm outline-none focus:border-indigo-500 bg-white shadow-sm"/></div>
                 <div className="md:col-span-2"><input type="number" placeholder="% Discount" value={form.discountPercent} onChange={e => setForm({...form, discountPercent: e.target.value})} className="w-full border rounded-lg p-2.5 text-sm outline-none focus:border-indigo-500 bg-white shadow-sm"/></div>
                 <div className="md:col-span-2 flex gap-1">
-                  <input type="number" placeholder="MOQ" value={form.moq} onChange={e => setForm({...form, moq: e.target.value})} className="w-1/2 border rounded-lg p-2.5 text-sm outline-none focus:border-indigo-500 bg-white shadow-sm" title="ขั้นต่ำ"/>
+                  <input type="number" step="any" placeholder="MOQ" value={form.moq} onChange={e => setForm({...form, moq: e.target.value})} className="w-1/2 border rounded-lg p-2.5 text-sm outline-none focus:border-indigo-500 bg-white shadow-sm" title="ขั้นต่ำ"/>
                   <select value={form.moqType} onChange={e => setForm({...form, moqType: e.target.value})} className="w-1/2 border rounded-lg p-2.5 text-[10px] outline-none focus:border-indigo-500 bg-white shadow-sm" title="รูปแบบขั้นต่ำ">
                     <option value="minimum">&ge; ขั้นต่ำ</option>
                     <option value="multiple">x ทุกๆ</option>
